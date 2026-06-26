@@ -1,6 +1,6 @@
 {
-  "name": "かぶメモ",
-  "short_name": "かぶメモ",
+  "name": "株＋",
+  "short_name": "株＋",
   "description": "投資シミュレーター",
   "start_url": "/",
   "display": "standalone",
@@ -8,6 +8,12 @@
   "theme_color": "#2563EB",
   "orientation": "portrait",
   "icons": [
+    {
+      "src": "/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "apple touch icon"
+    },
     {
       "src": "/icon-192.png",
       "sizes": "192x192",

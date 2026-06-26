@@ -104,16 +104,54 @@ const ChartTooltip = ({active,payload,label}) => {
   );
 };
 
+// ── localStorage helpers ────────────────────────────
+function loadLS(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    if (!v) return fallback;
+    const parsed = JSON.parse(v);
+    if (key === "kabu_holdings") {
+      return parsed.map(h => ({
+        ...h,
+        stock: STOCKS.find(s => s.symbol === h.stock.symbol) || h.stock,
+      }));
+    }
+    if (key === "kabu_simStocks") {
+      return parsed.map(sym => STOCKS.find(s => s.symbol === sym) || STOCKS[0]);
+    }
+    return parsed;
+  } catch { return fallback; }
+}
+function saveLS(key, value) {
+  try {
+    if (key === "kabu_simStocks") {
+      localStorage.setItem(key, JSON.stringify(value.map(s => s.symbol)));
+    } else {
+      localStorage.setItem(key, JSON.stringify(value));
+    }
+  } catch {}
+}
+
+const SAMPLE_HOLDINGS = [
+  {id:1, stock:STOCKS[0], purchaseDate:"2023-04-01", amount:30000},
+  {id:2, stock:STOCKS[6], purchaseDate:"2022-10-15", amount:358000},
+  {id:3, stock:STOCKS[20],purchaseDate:"2023-01-01", amount:50000},
+];
+
 // ══════════════════════════════════════════════════════
 export default function KabuMemo() {
   const [mainTab, setMainTab] = useState("portfolio");
 
-  // ── ポートフォリオ ──
-  const [holdings, setHoldings] = useState([
-    {id:1, stock:STOCKS[0], purchaseDate:"2023-04-01", amount:30000},
-    {id:2, stock:STOCKS[6], purchaseDate:"2022-10-15", amount:358000},
-    {id:3, stock:STOCKS[20],purchaseDate:"2023-01-01", amount:50000},
-  ]);
+  // ── ポートフォリオ（localStorage永続化）──
+  const [holdings, setHoldingsRaw] = useState(() => loadLS("kabu_holdings", SAMPLE_HOLDINGS));
+  const setHoldings = (v) => {
+    setHoldingsRaw(prev => {
+      const next = typeof v === "function" ? v(prev) : v;
+      saveLS("kabu_holdings", next);
+      return next;
+    });
+  };
+
   const [showAdd, setShowAdd]     = useState(false);
   const [newStock, setNewStock]   = useState(STOCKS[0]);
   const [newDate, setNewDate]     = useState(today());
@@ -123,23 +161,45 @@ export default function KabuMemo() {
   const [filterType, setFilterType]     = useState("all");
   const [cryptoPrices, setCryptoPrices] = useState({});
   const [cryptoLoading, setCryptoLoading] = useState(false);
+  const [stockPrices, setStockPrices]   = useState({});
+  const [priceLoading, setPriceLoading] = useState(false);
+  const [priceError, setPriceError]     = useState(false);
 
-  // ── シミュ ──
-  const [simMode, setSimMode]     = useState("monthly");
-  const [simStocks, setSimStocks] = useState([STOCKS[0]]);
-  const [monthly, setMonthly]     = useState(30000);
-  const [lump, setLump]           = useState(1000000);
-  const [months, setMonths]       = useState(120);
-  const [years, setYears]         = useState(10);
+  // ── シミュ（localStorage永続化）──
+  const [simMode, setSimModeRaw]  = useState(() => loadLS("kabu_simMode", "monthly"));
+  const setSimMode = v => { setSimModeRaw(v); saveLS("kabu_simMode", v); };
+  const [simStocks, setSimStocksRaw] = useState(() => loadLS("kabu_simStocks", [STOCKS[0]]));
+  const setSimStocks = (v) => {
+    setSimStocksRaw(prev => {
+      const next = typeof v === "function" ? v(prev) : v;
+      saveLS("kabu_simStocks", next);
+      return next;
+    });
+  };
+  const [monthly, setMonthlyRaw]  = useState(() => loadLS("kabu_monthly", 30000));
+  const setMonthly = v => { setMonthlyRaw(v); saveLS("kabu_monthly", v); };
+  const [lump, setLumpRaw]        = useState(() => loadLS("kabu_lump", 1000000));
+  const setLump    = v => { setLumpRaw(v);    saveLS("kabu_lump", v); };
+  const [months, setMonthsRaw]    = useState(() => loadLS("kabu_months", 120));
+  const setMonths  = v => { setMonthsRaw(v);  saveLS("kabu_months", v); };
+  const [years, setYearsRaw]      = useState(() => loadLS("kabu_years", 10));
+  const setYears   = v => { setYearsRaw(v);   saveLS("kabu_years", v); };
   const [simSearch, setSimSearch] = useState("");
   const [showSimSearch, setShowSimSearch] = useState(false);
 
-  // ── メモ ──
-  const [memos, setMemos]     = useState([]);
+  // ── メモ（localStorage永続化）──
+  const [memos, setMemosRaw] = useState(() => loadLS("kabu_memos", []));
+  const setMemos = (v) => {
+    setMemosRaw(prev => {
+      const next = typeof v === "function" ? v(prev) : v;
+      saveLS("kabu_memos", next);
+      return next;
+    });
+  };
   const [memoText, setMemoText] = useState("");
   const [memoTag, setMemoTag]   = useState("メモ");
 
-  // CoinGecko リアル価格
+  // ── CoinGecko 仮想通貨リアル価格 ──
   useEffect(() => {
     const ids = STOCKS.filter(s=>s.type==="crypto").map(s=>s.cgId).join(",");
     setCryptoLoading(true);
@@ -157,6 +217,24 @@ export default function KabuMemo() {
       })
       .catch(()=>{})
       .finally(()=>setCryptoLoading(false));
+  },[]);
+
+  // ── Yahoo Finance 株価リアルタイム（Vercel API Route経由）──
+  useEffect(() => {
+    const symbols = STOCKS.filter(s => s.type==="jp"||s.type==="us").map(s=>s.symbol).join(",");
+    setPriceLoading(true);
+    setPriceError(false);
+    // まず為替レート取得 → 米国株の円換算に使用
+    fetch("/api/forex")
+      .then(r => r.json())
+      .then(fx => {
+        const usdJpy = fx.usdJpy ?? 157.0;
+        return fetch(`/api/stock-prices?symbols=${symbols}&usdJpy=${usdJpy}`);
+      })
+      .then(r => { if(!r.ok) throw new Error(); return r.json(); })
+      .then(data => setStockPrices(data))
+      .catch(() => setPriceError(true))
+      .finally(() => setPriceLoading(false));
   },[]);
 
   // 最低金額チェック
@@ -274,7 +352,7 @@ export default function KabuMemo() {
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
           <div style={{width:36,height:36,background:"linear-gradient(135deg,#2563EB,#06B6D4)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,boxShadow:"0 3px 10px #2563EB33"}}>📈</div>
           <div>
-            <h1 style={{margin:0,fontSize:19,fontWeight:800,letterSpacing:"-0.02em"}}>かぶメモ</h1>
+            <h1 style={{margin:0,fontSize:19,fontWeight:800,letterSpacing:"-0.02em"}}>株＋</h1>
             <p style={{margin:0,fontSize:11,color:C.light}}>投資シミュレーター</p>
           </div>
         </div>
@@ -336,6 +414,7 @@ export default function KabuMemo() {
             {portfolioStats.map((h,i)=>{
               const boughtStr=new Date(h.purchaseDate).toLocaleDateString("ja-JP",{year:"numeric",month:"short",day:"numeric"});
               const cp=cryptoPrices[h.stock.symbol];
+              const sp=stockPrices[h.stock.symbol];
               return (
                 <div key={h.id} style={{borderTop:i>0?`1px solid ${C.soft}`:"none",paddingTop:i>0?14:0,paddingBottom:14}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
@@ -347,7 +426,9 @@ export default function KabuMemo() {
                           <span style={{background:TYPE_COLOR[h.stock.type]+"18",color:TYPE_COLOR[h.stock.type],fontSize:10,fontWeight:700,borderRadius:4,padding:"1px 6px"}}>{TYPE_LABEL[h.stock.type]}</span>
                         </div>
                         <div style={{fontSize:11,color:C.light}}>{h.stock.sector} · 年率{fmtPct(h.stock.annualReturn)}</div>
-                        {cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>現在価格: ¥{cp.price.toLocaleString()} ({cp.change24h>=0?"+":""}{cp.change24h.toFixed(1)}% 24h)</div>}
+                        {cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>現在価格: ¥{cp.price.toLocaleString()} ({cp.change24h>=0?"+":""}{cp.change24h.toFixed(1)}% 24h) <span style={{color:C.green,fontSize:10}}>● LIVE</span></div>}
+                        {sp&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>現在株価: ¥{sp.price.toLocaleString()} ({sp.change>=0?"+":""}{sp.change.toFixed(1)}%) <span style={{color:C.green,fontSize:10}}>● LIVE</span></div>}
+                        {priceError&&(h.stock.type==="jp"||h.stock.type==="us")&&!sp&&<div style={{fontSize:10,color:C.light,marginTop:1}}>株価: モックデータ使用中</div>}
                       </div>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>

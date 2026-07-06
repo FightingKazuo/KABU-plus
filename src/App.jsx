@@ -91,7 +91,7 @@ const STOCKS = [
     desc:"国際送金の効率化を目指す通貨。銀行との提携で注目。", tags:["仮想通貨","送金","法的リスク"] },
 ]
 
-const TYPE_LABELconst TYPE_LABEL = { fund:"投信", jp:"国内株", us:"米国株", crypto:"仮想通貨" };
+const TYPE_LABEL = { fund:"投信", jp:"国内株", us:"米国株", crypto:"仮想通貨" };
 const TYPE_COLOR = { fund:"#7C3AED", jp:"#2563EB", us:"#059669", crypto:"#F59E0B" };
 const RISK_LABEL = { low:"低リスク", medium:"中リスク", high:"高リスク", "very-high":"超ハイリスク" };
 const RISK_COLOR = { low:"#059669", medium:"#2563EB", high:"#D97706", "very-high":"#DC2626" };

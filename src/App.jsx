@@ -2,33 +2,96 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, ReferenceLine } from "recharts";
 
 const STOCKS = [
-  { symbol:"eMAXIS-SP500", name:"eMAXIS Slim 米国株式(S&P500)", sector:"投信", type:"fund", annualReturn:18.5, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium" },
-  { symbol:"eMAXIS-ALL",   name:"eMAXIS Slim 全世界株式",       sector:"投信", type:"fund", annualReturn:14.2, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium" },
-  { symbol:"SBI-SP500",    name:"SBI・V・S&P500インデックス",   sector:"投信", type:"fund", annualReturn:18.3, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium" },
-  { symbol:"SBI-NASDAQ",   name:"SBI・V・米国高配当株式",       sector:"投信", type:"fund", annualReturn:13.8, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium" },
-  { symbol:"NIKKEI225",    name:"eMAXIS Slim 国内株式(日経225)",sector:"投信", type:"fund", annualReturn:9.4,  dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium" },
-  { symbol:"FANG-PLUS",    name:"iFreeNEXT FANG+インデックス", sector:"投信", type:"fund", annualReturn:32.1, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"high" },
-  { symbol:"7203.T", name:"トヨタ自動車",         sector:"自動車",    type:"jp", annualReturn:12.4, dividend:2.8, minAmount:358000, unitShares:100, 優待:"自社製品割引", risk:"medium" },
-  { symbol:"6758.T", name:"ソニーグループ",        sector:"電機",      type:"jp", annualReturn:18.2, dividend:0.6, minAmount:142000, unitShares:100, 優待:null, risk:"medium" },
-  { symbol:"9984.T", name:"ソフトバンクG",         sector:"通信/投資", type:"jp", annualReturn:8.1,  dividend:2.2, minAmount:89500,  unitShares:100, 優待:null, risk:"medium" },
-  { symbol:"8306.T", name:"三菱UFJフィナンシャル", sector:"金融",      type:"jp", annualReturn:9.3,  dividend:3.2, minAmount:14850,  unitShares:100, 優待:null, risk:"medium" },
-  { symbol:"2914.T", name:"日本たばこ産業(JT)",    sector:"食品",      type:"jp", annualReturn:5.8,  dividend:5.6, minAmount:42800,  unitShares:100, 優待:"自社製品", risk:"low" },
-  { symbol:"9432.T", name:"NTT",                   sector:"通信",      type:"jp", annualReturn:7.6,  dividend:3.1, minAmount:1780,   unitShares:100, 優待:"dポイント", risk:"low" },
-  { symbol:"3382.T", name:"セブン&アイHD",         sector:"小売",      type:"jp", annualReturn:6.1,  dividend:2.4, minAmount:21800,  unitShares:100, 優待:"商品券", risk:"low" },
-  { symbol:"4502.T", name:"武田薬品工業",           sector:"医薬品",    type:"jp", annualReturn:4.2,  dividend:4.8, minAmount:42500,  unitShares:100, 優待:null, risk:"low" },
-  { symbol:"AAPL",  name:"Apple",               sector:"テクノロジー", type:"us", annualReturn:22.1, dividend:0.5, minAmount:32000,  unitShares:1, 優待:null, risk:"medium" },
-  { symbol:"MSFT",  name:"Microsoft",           sector:"テクノロジー", type:"us", annualReturn:19.8, dividend:0.7, minAmount:64000,  unitShares:1, 優待:null, risk:"medium" },
-  { symbol:"NVDA",  name:"NVIDIA",              sector:"半導体",       type:"us", annualReturn:87.2, dividend:0.0, minAmount:20000,  unitShares:1, 優待:null, risk:"high" },
-  { symbol:"TSLA",  name:"Tesla",               sector:"EV",           type:"us", annualReturn:31.5, dividend:0,   minAmount:37000,  unitShares:1, 優待:null, risk:"high" },
-  { symbol:"AMZN",  name:"Amazon",              sector:"EC/クラウド",  type:"us", annualReturn:24.3, dividend:0,   minAmount:28000,  unitShares:1, 優待:null, risk:"medium" },
-  { symbol:"VOO",   name:"Vanguard S&P500 ETF", sector:"ETF",          type:"us", annualReturn:13.2, dividend:1.4, minAmount:77000,  unitShares:1, 優待:null, risk:"medium" },
-  { symbol:"BTC", name:"Bitcoin",  sector:"仮想通貨", type:"crypto", annualReturn:80.0,  dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"bitcoin" },
-  { symbol:"ETH", name:"Ethereum", sector:"仮想通貨", type:"crypto", annualReturn:60.0,  dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"ethereum" },
-  { symbol:"SOL", name:"Solana",   sector:"仮想通貨", type:"crypto", annualReturn:120.0, dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"solana" },
-  { symbol:"XRP", name:"XRP",      sector:"仮想通貨", type:"crypto", annualReturn:40.0,  dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"ripple" },
-];
+  // ── 投信・インデックスファンド ──
+  { symbol:"eMAXIS-SP500", name:"eMAXIS Slim 米国株式(S&P500)", sector:"投信", type:"fund", annualReturn:18.5, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium",
+    desc:"米国の大企業500社に分散投資。初心者に最もおすすめ。", tags:["初心者向け","分散投資","積立NISA"] },
+  { symbol:"eMAXIS-ALL", name:"eMAXIS Slim 全世界株式", sector:"投信", type:"fund", annualReturn:14.2, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium",
+    desc:"世界中の株に一括投資。これ1本で世界分散が完成。", tags:["初心者向け","全世界","積立NISA"] },
+  { symbol:"SBI-SP500", name:"SBI・V・S&P500インデックス", sector:"投信", type:"fund", annualReturn:18.3, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium",
+    desc:"S&P500に超低コストで投資できるSBI版。", tags:["低コスト","積立NISA","人気"] },
+  { symbol:"eMAXIS-NASDAQ", name:"eMAXIS Slim 米国株式(NASDAQ100)", sector:"投信", type:"fund", annualReturn:22.4, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"high",
+    desc:"GAFAMなどIT大手100社に集中投資。高リターン狙い。", tags:["成長株","テクノロジー","ハイリスク"] },
+  { symbol:"NIKKEI225", name:"eMAXIS Slim 国内株式(日経225)", sector:"投信", type:"fund", annualReturn:9.4, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium",
+    desc:"日本を代表する225社への投資。円建てで安心感あり。", tags:["日本株","円建て","安定"] },
+  { symbol:"FANG-PLUS", name:"iFreeNEXT FANG+インデックス", sector:"投信", type:"fund", annualReturn:32.1, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"high",
+    desc:"GAFAM＋注目テック10社に集中。ハイリスク・ハイリターン。", tags:["集中投資","テクノロジー","ハイリスク"] },
+  { symbol:"SBI-HAITOU", name:"SBI・V・米国高配当株式", sector:"投信", type:"fund", annualReturn:11.2, dividend:3.1, minAmount:100, unitShares:null, 優待:null, risk:"low",
+    desc:"配当収入を重視した米国株ファンド。安定収入を求める方に。", tags:["高配当","安定収入","低リスク"] },
+  { symbol:"eMAXIS-REIT", name:"eMAXIS Slim 国内リート", sector:"投信", type:"fund", annualReturn:7.3, dividend:3.8, minAmount:100, unitShares:null, 優待:null, risk:"medium",
+    desc:"不動産への間接投資。高い分配金が魅力。", tags:["不動産","高配当","インフレ対策"] },
 
-const TYPE_LABEL = { fund:"投信", jp:"国内株", us:"米国株", crypto:"仮想通貨" };
+  // ── 国内個別株 ──
+  { symbol:"7203.T", name:"トヨタ自動車", sector:"自動車", type:"jp", annualReturn:12.4, dividend:2.8, minAmount:358000, unitShares:100, 優待:"自社製品割引", risk:"medium",
+    desc:"世界最大級の自動車メーカー。EV転換中。安定した日本の顔。", tags:["日本代表","配当あり","優待あり"] },
+  { symbol:"6758.T", name:"ソニーグループ", sector:"電機", type:"jp", annualReturn:18.2, dividend:0.6, minAmount:142000, unitShares:100, 優待:null, risk:"medium",
+    desc:"PS・カメラ・音楽・映画。多様な事業で成長続ける。", tags:["エンタメ","成長株","グローバル"] },
+  { symbol:"9984.T", name:"ソフトバンクG", sector:"通信/投資", type:"jp", annualReturn:8.1, dividend:2.2, minAmount:89500, unitShares:100, 優待:null, risk:"high",
+    desc:"AIベンチャーへの大規模投資。ハイリスクだが話題性抜群。", tags:["AI投資","ハイリスク","話題性"] },
+  { symbol:"8306.T", name:"三菱UFJフィナンシャル", sector:"金融", type:"jp", annualReturn:9.3, dividend:3.2, minAmount:14850, unitShares:100, 優待:null, risk:"low",
+    desc:"日本最大の銀行グループ。金利上昇局面で注目度アップ。", tags:["金融","高配当","低リスク"] },
+  { symbol:"2914.T", name:"日本たばこ産業(JT)", sector:"食品", type:"jp", annualReturn:5.8, dividend:5.6, minAmount:42800, unitShares:100, 優待:"自社製品", risk:"low",
+    desc:"配当利回り5%超の高配当銘柄。安定したキャッシュフロー。", tags:["超高配当","安定収入","優待あり"] },
+  { symbol:"9432.T", name:"NTT", sector:"通信", type:"jp", annualReturn:7.6, dividend:3.1, minAmount:1780, unitShares:100, 優待:"dポイント", risk:"low",
+    desc:"1株約18円から買える。少額から始めたい人に最適。", tags:["少額投資","安定","優待あり"] },
+  { symbol:"3382.T", name:"セブン&アイHD", sector:"小売", type:"jp", annualReturn:6.1, dividend:2.4, minAmount:21800, unitShares:100, 優待:"商品券", risk:"low",
+    desc:"セブンイレブン・イトーヨーカドーを展開。生活密着型。", tags:["生活必需品","優待あり","安定"] },
+  { symbol:"4502.T", name:"武田薬品工業", sector:"医薬品", type:"jp", annualReturn:4.2, dividend:4.8, minAmount:42500, unitShares:100, 優待:null, risk:"low",
+    desc:"日本最大の製薬会社。高配当で守りの投資に向く。", tags:["医薬品","高配当","ディフェンシブ"] },
+  { symbol:"4063.T", name:"信越化学工業", sector:"化学", type:"jp", annualReturn:14.7, dividend:1.8, minAmount:582000, unitShares:100, 優待:null, risk:"medium",
+    desc:"半導体素材で世界トップ。半導体ブームの恩恵を受ける。", tags:["半導体","成長株","グローバル"] },
+  { symbol:"6861.T", name:"キーエンス", sector:"精密機器", type:"jp", annualReturn:16.2, dividend:0.3, minAmount:7310000, unitShares:100, 優待:null, risk:"medium",
+    desc:"超高収益の産業用センサーメーカー。株価は高いが実力も高い。", tags:["高収益","成長株","FA自動化"] },
+  { symbol:"7974.T", name:"任天堂", sector:"ゲーム", type:"jp", annualReturn:11.8, dividend:2.1, minAmount:840000, unitShares:100, 優待:null, risk:"medium",
+    desc:"マリオ・ポケモン・スイッチ。世界的IPで安定成長。", tags:["ゲーム","エンタメ","グローバルIP"] },
+  { symbol:"4755.T", name:"楽天グループ", sector:"IT/通信", type:"jp", annualReturn:3.2, dividend:0, minAmount:9700, unitShares:100, 優待:null, risk:"high",
+    desc:"EC・金融・モバイルの総合サービス。再建中で高リスク高期待。", tags:["ハイリスク","再建中","モバイル"] },
+  { symbol:"3769.T", name:"GMOペイメントG", sector:"IT/決済", type:"jp", annualReturn:13.4, dividend:1.2, minAmount:51200, unitShares:100, 優待:null, risk:"medium",
+    desc:"キャッシュレス決済で成長。フィンテック関連の注目株。", tags:["フィンテック","成長株","キャッシュレス"] },
+  { symbol:"2502.T", name:"アサヒグループHD", sector:"食品", type:"jp", annualReturn:7.8, dividend:2.1, minAmount:23400, unitShares:100, 優待:"自社製品", risk:"low",
+    desc:"スーパードライなど国内外にブランドを持つ飲料大手。", tags:["食品","優待あり","安定"] },
+  { symbol:"9020.T", name:"東日本旅客鉄道(JR東日本)", sector:"鉄道", type:"jp", annualReturn:5.4, dividend:2.0, minAmount:273000, unitShares:100, 優待:"乗車割引", risk:"low",
+    desc:"鉄道・ホテル・商業施設。インバウンド回復で注目。", tags:["インフラ","優待あり","安定"] },
+
+  // ── 米国個別株・ETF ──
+  { symbol:"AAPL", name:"Apple", sector:"テクノロジー", type:"us", annualReturn:22.1, dividend:0.5, minAmount:32000, unitShares:1, 優待:null, risk:"medium",
+    desc:"iPhone・Mac・サービスで世界最大の時価総額企業。", tags:["超有名","テクノロジー","安定成長"] },
+  { symbol:"MSFT", name:"Microsoft", sector:"テクノロジー", type:"us", annualReturn:19.8, dividend:0.7, minAmount:64000, unitShares:1, 優待:null, risk:"medium",
+    desc:"Windows・Azure・ChatGPT投資元。AI時代の本命。", tags:["AI","クラウド","安定成長"] },
+  { symbol:"NVDA", name:"NVIDIA", sector:"半導体", type:"us", annualReturn:87.2, dividend:0.03, minAmount:20000, unitShares:1, 優待:null, risk:"high",
+    desc:"AI用GPUで世界独占。ChatGPTブームの最大受益者。", tags:["AI","爆発的成長","ハイリスク"] },
+  { symbol:"TSLA", name:"Tesla", sector:"EV/エネルギー", type:"us", annualReturn:31.5, dividend:0, minAmount:37000, unitShares:1, 優待:null, risk:"high",
+    desc:"EV世界トップ。イーロン・マスク率いる革新企業。", tags:["EV","成長株","ハイリスク"] },
+  { symbol:"AMZN", name:"Amazon", sector:"EC/クラウド", type:"us", annualReturn:24.3, dividend:0, minAmount:28000, unitShares:1, 優待:null, risk:"medium",
+    desc:"EC・AWS・広告。多角化で安定成長を続ける。", tags:["クラウド","EC","成長株"] },
+  { symbol:"GOOGL", name:"Alphabet(Google)", sector:"テクノロジー", type:"us", annualReturn:21.7, dividend:0, minAmount:26000, unitShares:1, 優待:null, risk:"medium",
+    desc:"検索・YouTube・Android。生活に欠かせないプラットフォーム。", tags:["広告","AI","安定成長"] },
+  { symbol:"META", name:"Meta Platforms", sector:"SNS", type:"us", annualReturn:28.4, dividend:0.4, minAmount:88000, unitShares:1, 優待:null, risk:"medium",
+    desc:"Facebook・Instagram・WhatsApp。SNS広告の巨人。", tags:["SNS","AI投資","成長株"] },
+  { symbol:"BRK-B", name:"Berkshire Hathaway B", sector:"投資会社", type:"us", annualReturn:12.8, dividend:0, minAmount:60000, unitShares:1, 優待:null, risk:"low",
+    desc:"投資の神様バフェットが率いる投資会社。安定の王様。", tags:["安定","バフェット","長期投資"] },
+  { symbol:"JPM", name:"JPMorgan Chase", sector:"金融", type:"us", annualReturn:14.2, dividend:2.4, minAmount:36000, unitShares:1, 優待:null, risk:"low",
+    desc:"米国最大の銀行。金利上昇の恩恵を受ける安定株。", tags:["金融","高配当","安定"] },
+  { symbol:"VOO", name:"Vanguard S&P500 ETF", sector:"ETF", type:"us", annualReturn:13.2, dividend:1.4, minAmount:77000, unitShares:1, 優待:null, risk:"medium",
+    desc:"S&P500に連動するETF。eMAXIS SlimのETF版。", tags:["ETF","分散投資","初心者向け"] },
+  { symbol:"QQQ", name:"Invesco QQQ ETF", sector:"ETF", type:"us", annualReturn:20.1, dividend:0.6, minAmount:68000, unitShares:1, 優待:null, risk:"high",
+    desc:"NASDAQ100に連動。テクノロジー株に集中投資するETF。", tags:["ETF","テクノロジー","成長"] },
+  { symbol:"VYM", name:"Vanguard 高配当ETF", sector:"ETF", type:"us", annualReturn:10.2, dividend:3.2, minAmount:17000, unitShares:1, 優待:null, risk:"low",
+    desc:"米国の高配当株に分散投資。安定した配当収入が魅力。", tags:["ETF","高配当","安定収入"] },
+  { symbol:"SPYD", name:"SPDR S&P500 高配当ETF", sector:"ETF", type:"us", annualReturn:9.8, dividend:4.5, minAmount:5800, unitShares:1, 優待:null, risk:"low",
+    desc:"配当利回り4%超。少額から高配当投資ができるETF。", tags:["ETF","超高配当","少額OK"] },
+
+  // ── 仮想通貨 ──
+  { symbol:"BTC", name:"Bitcoin", sector:"仮想通貨", type:"crypto", annualReturn:80.0, dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"bitcoin",
+    desc:"仮想通貨の王様。発行上限2100万枚で希少性がある。", tags:["仮想通貨","希少性","ハイリスク"] },
+  { symbol:"ETH", name:"Ethereum", sector:"仮想通貨", type:"crypto", annualReturn:60.0, dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"ethereum",
+    desc:"スマートコントラクトの基盤。DeFi・NFTの土台となる通貨。", tags:["仮想通貨","Web3","ハイリスク"] },
+  { symbol:"SOL", name:"Solana", sector:"仮想通貨", type:"crypto", annualReturn:120.0, dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"solana",
+    desc:"高速・低コストなブロックチェーン。ETHの競合として急成長。", tags:["仮想通貨","高速","超ハイリスク"] },
+  { symbol:"XRP", name:"XRP(リップル)", sector:"仮想通貨", type:"crypto", annualReturn:40.0, dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"ripple",
+    desc:"国際送金の効率化を目指す通貨。銀行との提携で注目。", tags:["仮想通貨","送金","法的リスク"] },
+]
+
+const TYPE_LABELconst TYPE_LABEL = { fund:"投信", jp:"国内株", us:"米国株", crypto:"仮想通貨" };
 const TYPE_COLOR = { fund:"#7C3AED", jp:"#2563EB", us:"#059669", crypto:"#F59E0B" };
 const RISK_LABEL = { low:"低リスク", medium:"中リスク", high:"高リスク", "very-high":"超ハイリスク" };
 const RISK_COLOR = { low:"#059669", medium:"#2563EB", high:"#D97706", "very-high":"#DC2626" };
@@ -114,6 +177,114 @@ const ChartTooltip = ({active,payload,label}) => {
     </div>
   );
 };
+
+// ── 銘柄一覧コンポーネント ─────────────────────────────
+const THEME_TABS = [
+  { key:"all",     label:"すべて" },
+  { key:"beginner",label:"初心者向け" },
+  { key:"dividend",label:"高配当" },
+  { key:"growth",  label:"成長株" },
+  { key:"fund",    label:"投信" },
+  { key:"jp",      label:"国内株" },
+  { key:"us",      label:"米国株" },
+  { key:"crypto",  label:"仮想通貨" },
+];
+
+function matchTheme(s, theme) {
+  if (theme === "all") return true;
+  if (theme === "fund" || theme === "jp" || theme === "us" || theme === "crypto") return s.type === theme;
+  if (theme === "beginner") return s.tags?.includes("初心者向け") || s.tags?.includes("少額OK") || s.risk === "low";
+  if (theme === "dividend") return s.tags?.some(t => t.includes("配当")) || s.dividend >= 2;
+  if (theme === "growth")   return s.tags?.includes("成長株") || s.tags?.includes("爆発的成長") || s.annualReturn >= 18;
+  return true;
+}
+
+function StockList({ stocks, stockPrices, cryptoPrices, onSelect }) {
+  const [theme, setTheme]   = useState("all");
+  const [search, setSearch] = useState("");
+
+  const filtered = stocks.filter(s => {
+    const matchT = matchTheme(s, theme);
+    const q = search.toLowerCase();
+    const matchS = !q || s.name.toLowerCase().includes(q) || s.symbol.toLowerCase().includes(q) || s.sector.includes(q);
+    return matchT && matchS;
+  });
+
+  return (
+    <div>
+      {/* 検索 */}
+      <div style={{marginBottom:12}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍  銘柄名・コード・セクターで検索"
+          style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,color:C.text,padding:"10px 14px",fontSize:13,boxSizing:"border-box",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}/>
+      </div>
+
+      {/* テーマタブ */}
+      <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4}}>
+        {THEME_TABS.map(t=>(
+          <button key={t.key} onClick={()=>setTheme(t.key)} style={{background:theme===t.key?C.blue:C.card,color:theme===t.key?"#fff":C.mid,border:`1px solid ${theme===t.key?C.blue:C.border}`,borderRadius:20,padding:"5px 14px",fontSize:12,fontWeight:theme===t.key?700:400,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,transition:"all .15s"}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 件数 */}
+      <div style={{fontSize:11,color:C.light,marginBottom:10}}>{filtered.length}銘柄</div>
+
+      {/* リスト */}
+      <div style={{background:C.card,borderRadius:14,border:`1px solid ${C.border}`,overflow:"hidden",boxShadow:"0 1px 6px rgba(0,0,0,0.05)"}}>
+        {filtered.length===0&&<div style={{textAlign:"center",padding:"32px 0",color:C.light,fontSize:13}}>見つかりませんでした</div>}
+        {filtered.map((s,i)=>{
+          const sp = stockPrices[s.symbol];
+          const cp = cryptoPrices[s.symbol];
+          const livePrice = sp?.price ?? cp?.price ?? null;
+          const liveChange = sp?.change ?? cp?.change24h ?? null;
+          return (
+            <div key={s.symbol} style={{padding:"12px 16px",borderTop:i>0?`1px solid ${C.soft}`:"none"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                {/* 左：銘柄名・説明 */}
+                <div style={{flex:1,marginRight:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
+                    <span style={{fontSize:14,fontWeight:700,color:C.text}}>{s.name}</span>
+                    <span style={{background:TYPE_COLOR[s.type]+"18",color:TYPE_COLOR[s.type],fontSize:9,fontWeight:700,borderRadius:4,padding:"1px 6px"}}>{TYPE_LABEL[s.type]}</span>
+                    <span style={{background:RISK_COLOR[s.risk]+"15",color:RISK_COLOR[s.risk],fontSize:9,fontWeight:700,borderRadius:4,padding:"1px 6px"}}>{RISK_LABEL[s.risk]}</span>
+                  </div>
+                  <div style={{fontSize:11,color:C.mid,marginBottom:5,lineHeight:1.5}}>{s.desc}</div>
+                  {/* タグ */}
+                  <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                    {s.tags?.map(tag=>(
+                      <span key={tag} style={{background:C.soft,color:C.mid,fontSize:10,borderRadius:4,padding:"2px 7px"}}>{tag}</span>
+                    ))}
+                  </div>
+                </div>
+                {/* 右：株価・ボタン */}
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  {livePrice?(
+                    <>
+                      <div style={{fontSize:13,fontWeight:800,color:C.text}}>¥{livePrice.toLocaleString()}</div>
+                      {liveChange!==null&&<div style={{fontSize:11,color:liveChange>=0?C.green:C.red,fontWeight:600}}>{liveChange>=0?"+":""}{liveChange.toFixed(1)}%</div>}
+                      <div style={{fontSize:9,color:C.green,fontWeight:700,marginBottom:4}}>●LIVE</div>
+                    </>
+                  ):(
+                    <div style={{fontSize:11,color:C.light,marginBottom:6}}>年率{fmtPct(s.annualReturn)}</div>
+                  )}
+                  <button onClick={()=>onSelect(s)} style={{background:C.blue,border:"none",borderRadius:7,color:"#fff",fontSize:11,fontWeight:700,padding:"5px 10px",cursor:"pointer",whiteSpace:"nowrap"}}>
+                    ＋ 追加
+                  </button>
+                </div>
+              </div>
+              {/* 下段：配当・最低購入額 */}
+              <div style={{display:"flex",gap:12,paddingTop:6,borderTop:`1px solid ${C.soft}`}}>
+                <div style={{fontSize:10,color:C.light}}>最低購入額: <span style={{color:C.mid,fontWeight:600}}>{fmt(s.minAmount)}</span></div>
+                {s.dividend>0&&<div style={{fontSize:10,color:C.light}}>配当利回り: <span style={{color:C.amber,fontWeight:600}}>{s.dividend}%</span></div>}
+                {s.優待&&<div style={{fontSize:10,color:C.amber}}>🎁 優待あり</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 const SAMPLE_HOLDINGS = [
   {id:1,stock:STOCKS[0],purchaseDate:"2023-04-01",amount:30000,purchasePrice:null},
@@ -351,23 +522,40 @@ export default function KabuPlus() {
     <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'Helvetica Neue',Arial,sans-serif",maxWidth:480,margin:"0 auto"}}>
 
       {/* ── Header ── */}
-      <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,padding:"16px 18px 0",position:"sticky",top:0,zIndex:10,boxShadow:"0 1px 8px rgba(0,0,0,0.04)"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+      <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,zIndex:10,boxShadow:"0 2px 12px rgba(0,0,0,0.06)"}}>
+        {/* ロゴ行 */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px 10px"}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{width:36,height:36,background:"linear-gradient(135deg,#2563EB,#06B6D4)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,boxShadow:"0 3px 10px #2563EB33"}}>📈</div>
+            <div style={{width:34,height:34,background:"linear-gradient(135deg,#2563EB,#06B6D4)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,boxShadow:"0 2px 8px #2563EB40"}}>📈</div>
             <div>
-              <h1 style={{margin:0,fontSize:19,fontWeight:800,letterSpacing:"-0.02em"}}>株＋</h1>
-              <p style={{margin:0,fontSize:11,color:C.light}}>投資シミュレーター</p>
+              <h1 style={{margin:0,fontSize:18,fontWeight:800,letterSpacing:"-0.03em",color:C.text}}>株＋</h1>
+              <p style={{margin:0,fontSize:10,color:C.light,letterSpacing:"0.02em"}}>投資シミュレーター</p>
             </div>
           </div>
-          {usdJpy&&<div style={{background:C.blueLight,border:`1px solid ${C.blueMid}`,borderRadius:8,padding:"4px 10px",textAlign:"center"}}>
-            <div style={{fontSize:9,color:C.light}}>USD/JPY</div>
-            <div style={{fontSize:13,fontWeight:800,color:C.blue}}>¥{usdJpy.toFixed(1)}</div>
-          </div>}
+          {/* ステータスバッジ群 */}
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            {usdJpy&&(
+              <div style={{background:C.blueLight,border:`1px solid ${C.blueMid}`,borderRadius:8,padding:"3px 8px",textAlign:"center"}}>
+                <div style={{fontSize:8,color:C.light,fontWeight:600}}>USD/JPY</div>
+                <div style={{fontSize:12,fontWeight:800,color:C.blue}}>¥{usdJpy.toFixed(1)}</div>
+              </div>
+            )}
+            {priceLoading&&(
+              <div style={{background:C.soft,borderRadius:8,padding:"3px 8px"}}>
+                <div style={{fontSize:10,color:C.light}}>取得中...</div>
+              </div>
+            )}
+            {!priceLoading&&!priceError&&stockPrices&&Object.keys(stockPrices).length>0&&(
+              <div style={{background:C.greenLight,border:`1px solid ${C.greenMid}`,borderRadius:8,padding:"3px 8px"}}>
+                <div style={{fontSize:10,color:C.green,fontWeight:700}}>● LIVE</div>
+              </div>
+            )}
+          </div>
         </div>
-        <div style={{display:"flex"}}>
-          {[["portfolio","💼 保有株"],["sim","📊 シミュ"]].map(([key,label])=>(
-            <button key={key} onClick={()=>setMainTab(key)} style={{flex:1,padding:"9px 0",background:"none",border:"none",borderBottom:mainTab===key?`2.5px solid ${C.blue}`:"2.5px solid transparent",color:mainTab===key?C.blue:C.light,fontSize:13,fontWeight:mainTab===key?700:400,cursor:"pointer"}}>{label}</button>
+        {/* タブ */}
+        <div style={{display:"flex",borderTop:`1px solid ${C.soft}`}}>
+          {[["portfolio","💼 保有株"],["sim","📊 シミュ"],["stocks","🔍 銘柄一覧"]].map(([key,label])=>(
+            <button key={key} onClick={()=>setMainTab(key)} style={{flex:1,padding:"9px 0",background:"none",border:"none",borderBottom:mainTab===key?`2.5px solid ${C.blue}`:"2.5px solid transparent",color:mainTab===key?C.blue:C.light,fontSize:12,fontWeight:mainTab===key?700:400,cursor:"pointer",transition:"color .15s"}}>{label}</button>
           ))}
         </div>
       </div>
@@ -872,6 +1060,9 @@ export default function KabuPlus() {
             </div>
           ))}
         </>)}
+
+        {/* ════ 銘柄一覧タブ ════ */}
+        {mainTab==="stocks"&&(<StockList stocks={STOCKS} stockPrices={stockPrices} cryptoPrices={cryptoPrices} onSelect={s=>{setNewStock(s);setMainTab("portfolio");setShowAdd(true);}}/>)}
 
       </div>
       <div style={{padding:"0 16px 36px",textAlign:"center"}}>

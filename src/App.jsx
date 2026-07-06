@@ -50,7 +50,12 @@ const C = {
   amber:"#D97706", amberLight:"#FFFBEB",
 };
 
-function calcCurrentValue(amount, purchaseDate, annualReturn) {
+function calcCurrentValue(amount, purchaseDate, annualReturn, currentPrice, purchasePrice) {
+  // currentPrice(現在株価)とpurchasePrice(購入時株価)がある場合は実際の株価差で計算
+  if (currentPrice && purchasePrice && purchasePrice > 0) {
+    return Math.round(amount * (currentPrice / purchasePrice));
+  }
+  // なければ年率近似
   const now = new Date();
   const bought = new Date(purchaseDate);
   const years = Math.max(0, (now - bought) / (1000*60*60*24*365.25));
@@ -164,6 +169,12 @@ export default function KabuMemo() {
   const [stockPrices, setStockPrices]   = useState({});
   const [priceLoading, setPriceLoading] = useState(false);
   const [priceError, setPriceError]     = useState(false);
+  const [usdJpy, setUsdJpy]             = useState(null);
+  // 銘柄リアルタイム検索
+  const [searchResults, setSearchResults]   = useState([]);
+  const [searchLoading, setSearchLoading]   = useState(false);
+  const [searchError, setSearchError]       = useState(false);
+  const [searchMode, setSearchMode]         = useState(false); // true=リアルタイム検索モード
 
   // ── シミュ（localStorage永続化）──
   const [simMode, setSimModeRaw]  = useState(() => loadLS("kabu_simMode", "monthly"));
@@ -219,23 +230,41 @@ export default function KabuMemo() {
       .finally(()=>setCryptoLoading(false));
   },[]);
 
-  // ── Yahoo Finance 株価リアルタイム（Vercel API Route経由）──
+  // ── 為替レート + 株価リアルタイム（Vercel API Route経由）──
   useEffect(() => {
     const symbols = STOCKS.filter(s => s.type==="jp"||s.type==="us").map(s=>s.symbol).join(",");
     setPriceLoading(true);
     setPriceError(false);
-    // まず為替レート取得 → 米国株の円換算に使用
     fetch("/api/forex")
       .then(r => r.json())
       .then(fx => {
-        const usdJpy = fx.usdJpy ?? 157.0;
-        return fetch(`/api/stock-prices?symbols=${symbols}&usdJpy=${usdJpy}`);
+        const rate = fx.usdJpy ?? 157.0;
+        setUsdJpy(rate);
+        return fetch(`/api/stock-prices?symbols=${symbols}&usdJpy=${rate}`);
       })
       .then(r => { if(!r.ok) throw new Error(); return r.json(); })
       .then(data => setStockPrices(data))
       .catch(() => setPriceError(true))
       .finally(() => setPriceLoading(false));
   },[]);
+
+  // ── 銘柄リアルタイム検索（デバウンス付き）──
+  useEffect(() => {
+    if (!searchMode || stockSearch.length < 1) {
+      setSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setSearchLoading(true);
+      setSearchError(false);
+      fetch(`/api/stock-search?q=${encodeURIComponent(stockSearch)}`)
+        .then(r => { if(!r.ok) throw new Error(); return r.json(); })
+        .then(data => setSearchResults(data.results ?? []))
+        .catch(() => setSearchError(true))
+        .finally(() => setSearchLoading(false));
+    }, 500); // 500msデバウンス
+    return () => clearTimeout(timer);
+  }, [stockSearch, searchMode]);
 
   // 最低金額チェック
   const minWarning = useMemo(()=>{
@@ -253,20 +282,26 @@ export default function KabuMemo() {
   // ポートフォリオ計算
   const portfolioStats = useMemo(()=>
     holdings.map(h=>{
-      let currentValue;
-      if(h.stock.type==="crypto"&&cryptoPrices[h.stock.symbol]){
-        const cp = cryptoPrices[h.stock.symbol];
-        const years = Math.max(0,(new Date()-new Date(h.purchaseDate))/(1000*60*60*24*365.25));
-        currentValue = Math.round(h.amount*Math.pow(1+h.stock.annualReturn/100,years));
-      } else {
-        currentValue = calcCurrentValue(h.amount,h.purchaseDate,h.stock.annualReturn);
-      }
-      const gain = currentValue-h.amount;
-      const gainPct = (currentValue/h.amount-1)*100;
-      const days = Math.floor((new Date()-new Date(h.purchaseDate))/(1000*60*60*24));
-      return {...h,currentValue,gain,gainPct,days};
+      const sp = stockPrices[h.stock.symbol];    // リアルタイム株価
+      const cp = cryptoPrices[h.stock.symbol];   // 仮想通貨リアル価格
+      // 購入時の株価（記録時に保存してある場合）
+      const purchasePrice = h.purchasePrice ?? null;
+      const currentPrice  = sp?.price ?? null;
+
+      const currentValue = calcCurrentValue(
+        h.amount,
+        h.purchaseDate,
+        h.stock.annualReturn,
+        currentPrice,
+        purchasePrice
+      );
+      const gain    = currentValue - h.amount;
+      const gainPct = (currentValue / h.amount - 1) * 100;
+      const days    = Math.floor((new Date()-new Date(h.purchaseDate))/(1000*60*60*24));
+      const isLive  = !!(sp || cp);
+      return {...h, currentValue, gain, gainPct, days, isLive, currentPrice, cp};
     })
-  ,[holdings,cryptoPrices]);
+  ,[holdings, cryptoPrices, stockPrices]);
 
   const totalInvested = portfolioStats.reduce((s,h)=>s+h.amount,0);
   const totalValue    = portfolioStats.reduce((s,h)=>s+h.currentValue,0);
@@ -299,8 +334,20 @@ export default function KabuMemo() {
 
   const addHolding = ()=>{
     if(minWarning) return;
-    setHoldings(p=>[...p,{id:Date.now(),stock:newStock,purchaseDate:newDate,amount:newAmount}]);
-    setShowAdd(false); setStockSearch("");
+    // 購入時の株価を記録しておく（損益の正確な計算に使用）
+    const sp = stockPrices[newStock.symbol];
+    const purchasePrice = sp?.rawPrice ?? sp?.price ?? null;
+    setHoldings(p=>[...p,{
+      id: Date.now(),
+      stock: newStock,
+      purchaseDate: newDate,
+      amount: newAmount,
+      purchasePrice,  // 購入時株価（APIから取得できた場合のみ）
+    }]);
+    setShowAdd(false);
+    setStockSearch("");
+    setSearchResults([]);
+    setSearchMode(false);
   };
 
   // シミュ
@@ -380,6 +427,7 @@ export default function KabuMemo() {
               {[["投資元本",fmt(totalInvested)],["保有銘柄",`${[...new Set(holdings.map(h=>h.stock.symbol))].length}銘柄`],["購入回数",`${holdings.length}回`]].map(([l,v])=>(
                 <div key={l}><div style={{fontSize:10,color:"#BFDBFE"}}>{l}</div><div style={{fontSize:14,fontWeight:700,color:"#fff"}}>{v}</div></div>
               ))}
+              {usdJpy&&<div style={{marginLeft:"auto"}}><div style={{fontSize:10,color:"#BFDBFE"}}>USD/JPY</div><div style={{fontSize:14,fontWeight:700,color:"#FDE68A"}}>¥{usdJpy.toFixed(1)}</div></div>}
             </div>
           </div>
 
@@ -426,9 +474,10 @@ export default function KabuMemo() {
                           <span style={{background:TYPE_COLOR[h.stock.type]+"18",color:TYPE_COLOR[h.stock.type],fontSize:10,fontWeight:700,borderRadius:4,padding:"1px 6px"}}>{TYPE_LABEL[h.stock.type]}</span>
                         </div>
                         <div style={{fontSize:11,color:C.light}}>{h.stock.sector} · 年率{fmtPct(h.stock.annualReturn)}</div>
-                        {cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>現在価格: ¥{cp.price.toLocaleString()} ({cp.change24h>=0?"+":""}{cp.change24h.toFixed(1)}% 24h) <span style={{color:C.green,fontSize:10}}>● LIVE</span></div>}
-                        {sp&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>現在株価: ¥{sp.price.toLocaleString()} ({sp.change>=0?"+":""}{sp.change.toFixed(1)}%) <span style={{color:C.green,fontSize:10}}>● LIVE</span></div>}
-                        {priceError&&(h.stock.type==="jp"||h.stock.type==="us")&&!sp&&<div style={{fontSize:10,color:C.light,marginTop:1}}>株価: モックデータ使用中</div>}
+                        {h.cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>現在価格: ¥{h.cp.price.toLocaleString()} ({h.cp.change24h>=0?"+":""}{h.cp.change24h.toFixed(1)}% 24h) <span style={{color:C.green,fontSize:10,fontWeight:700}}>● LIVE</span></div>}
+                        {h.currentPrice&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>現在株価: ¥{h.currentPrice.toLocaleString()} {h.currentPrice&&stockPrices[h.stock.symbol]?.change!==undefined&&`(${stockPrices[h.stock.symbol].change>=0?"+":""}${stockPrices[h.stock.symbol].change}%)`} <span style={{color:C.green,fontSize:10,fontWeight:700}}>● LIVE</span></div>}
+                        {h.purchasePrice&&<div style={{fontSize:10,color:C.light,marginTop:1}}>購入時株価: ¥{h.purchasePrice.toLocaleString()} → 実際の株価差で計算</div>}
+                        {priceError&&(h.stock.type==="jp"||h.stock.type==="us")&&!h.currentPrice&&<div style={{fontSize:10,color:C.light,marginTop:1}}>⚠️ 株価取得失敗 · 年率近似で計算中</div>}
                       </div>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
@@ -473,34 +522,100 @@ export default function KabuMemo() {
                 </div>
                 {showPicker&&(
                   <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,marginTop:6,overflow:"hidden"}}>
-                    <div style={{padding:"8px 8px 4px"}}>
-                      <input value={stockSearch} onChange={e=>setStockSearch(e.target.value)} placeholder="銘柄名・コード・セクター"
-                        style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:13,boxSizing:"border-box"}} autoFocus/>
-                    </div>
-                    {/* カテゴリフィルタ */}
-                    <div style={{display:"flex",gap:4,padding:"4px 8px 8px",overflowX:"auto"}}>
-                      {[["all","すべて"],["fund","投信"],["jp","国内株"],["us","米国株"],["crypto","仮想通貨"]].map(([t,l])=>(
-                        <button key={t} onClick={()=>setFilterType(t)} style={{background:filterType===t?C.blue:C.card,color:filterType===t?"#fff":C.mid,border:`1px solid ${filterType===t?C.blue:C.border}`,borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>{l}</button>
+                    {/* 検索モード切替 */}
+                    <div style={{display:"flex",background:C.soft,margin:8,borderRadius:8,padding:3}}>
+                      {[[false,"プリセット"],[true,"🔍 リアルタイム検索"]].map(([mode,label])=>(
+                        <button key={String(mode)} onClick={()=>{setSearchMode(mode);setSearchResults([]);setStockSearch("");}}
+                          style={{flex:1,padding:"6px 0",background:searchMode===mode?C.blue:"transparent",border:"none",borderRadius:6,color:searchMode===mode?"#fff":C.mid,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                          {label}
+                        </button>
                       ))}
                     </div>
-                    <div style={{maxHeight:240,overflowY:"auto"}}>
-                      {pickerStocks.map(s=>(
-                        <div key={s.symbol} onClick={()=>{setNewStock(s);setShowPicker(false);setStockSearch("");}}
-                          style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 14px",borderTop:`1px solid ${C.soft}`,cursor:"pointer",background:newStock.symbol===s.symbol?C.blueLight:C.card}}>
-                          <div>
-                            <div style={{display:"flex",alignItems:"center",gap:5}}>
-                              <span style={{fontSize:13,fontWeight:600,color:newStock.symbol===s.symbol?C.blue:C.text}}>{s.name}</span>
-                              <span style={{background:TYPE_COLOR[s.type]+"18",color:TYPE_COLOR[s.type],fontSize:9,fontWeight:700,borderRadius:3,padding:"1px 4px"}}>{TYPE_LABEL[s.type]}</span>
+                    <div style={{padding:"0 8px 6px"}}>
+                      <input value={stockSearch} onChange={e=>setStockSearch(e.target.value)}
+                        placeholder={searchMode?"銘柄名・コードで検索（例: トヨタ, AAPL）":"銘柄名・コード・セクター"}
+                        style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} autoFocus/>
+                    </div>
+
+                    {/* リアルタイム検索結果 */}
+                    {searchMode&&(
+                      <div style={{maxHeight:260,overflowY:"auto"}}>
+                        {searchLoading&&<div style={{textAlign:"center",padding:"16px 0",color:C.light,fontSize:12}}>検索中...</div>}
+                        {searchError&&<div style={{textAlign:"center",padding:"16px 0",color:C.red,fontSize:12}}>検索に失敗しました</div>}
+                        {!searchLoading&&searchResults.length===0&&stockSearch.length>0&&!searchError&&(
+                          <div style={{textAlign:"center",padding:"16px 0",color:C.light,fontSize:12}}>見つかりませんでした</div>
+                        )}
+                        {searchResults.map(s=>{
+                          const sp = stockPrices[s.symbol];
+                          return (
+                            <div key={s.symbol} onClick={()=>{
+                              // 検索結果からプリセットにない銘柄を動的追加
+                              const existing = STOCKS.find(x=>x.symbol===s.symbol);
+                              const stock = existing ?? {
+                                symbol: s.symbol,
+                                name: s.name,
+                                sector: s.sector||s.quoteType||"",
+                                type: s.type,
+                                annualReturn: s.type==="crypto"?50:s.type==="fund"?14:s.type==="jp"?10:15,
+                                dividend: 0,
+                                minAmount: s.type==="jp"?100000:s.type==="fund"?100:1000,
+                                unitShares: s.type==="jp"?100:1,
+                                優待: null,
+                                risk: s.type==="crypto"?"very-high":s.type==="us"?"medium":"medium",
+                              };
+                              setNewStock(stock);
+                              setShowPicker(false);
+                              setStockSearch("");
+                              setSearchResults([]);
+                            }}
+                              style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",borderTop:`1px solid ${C.soft}`,cursor:"pointer",background:newStock.symbol===s.symbol?C.blueLight:C.card}}>
+                              <div>
+                                <div style={{fontSize:13,fontWeight:600,color:newStock.symbol===s.symbol?C.blue:C.text}}>{s.name}</div>
+                                <div style={{fontSize:11,color:C.light}}>{s.symbol} · {s.exchange}</div>
+                              </div>
+                              <div style={{textAlign:"right"}}>
+                                {sp?<div style={{fontSize:13,fontWeight:700,color:C.text}}>¥{sp.price.toLocaleString()}</div>
+                                  :<div style={{fontSize:11,color:C.light}}>{s.quoteType}</div>}
+                                {sp&&<div style={{fontSize:11,color:sp.change>=0?C.green:C.red}}>{sp.change>=0?"+":""}{sp.change}%</div>}
+                              </div>
                             </div>
-                            <div style={{fontSize:11,color:C.light}}>{s.sector} · 最低{fmt(s.minAmount)}{s.優待?" 🎁":""}</div>
-                          </div>
-                          <div style={{textAlign:"right"}}>
-                            <div style={{fontSize:12,color:RISK_COLOR[s.risk],fontWeight:700}}>{fmtPct(s.annualReturn)}／年</div>
-                            <div style={{fontSize:10,color:RISK_COLOR[s.risk]}}>{RISK_LABEL[s.risk]}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* プリセット一覧 */}
+                    {!searchMode&&(<>
+                      <div style={{display:"flex",gap:4,padding:"0 8px 8px",overflowX:"auto"}}>
+                        {[["all","すべて"],["fund","投信"],["jp","国内株"],["us","米国株"],["crypto","仮想通貨"]].map(([t,l])=>(
+                          <button key={t} onClick={()=>setFilterType(t)} style={{background:filterType===t?C.blue:C.card,color:filterType===t?"#fff":C.mid,border:`1px solid ${filterType===t?C.blue:C.border}`,borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>{l}</button>
+                        ))}
+                      </div>
+                      <div style={{maxHeight:240,overflowY:"auto"}}>
+                        {pickerStocks.map(s=>{
+                          const sp = stockPrices[s.symbol];
+                          const cp = cryptoPrices[s.symbol];
+                          return (
+                            <div key={s.symbol} onClick={()=>{setNewStock(s);setShowPicker(false);setStockSearch("");}}
+                              style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 14px",borderTop:`1px solid ${C.soft}`,cursor:"pointer",background:newStock.symbol===s.symbol?C.blueLight:C.card}}>
+                              <div>
+                                <div style={{display:"flex",alignItems:"center",gap:5}}>
+                                  <span style={{fontSize:13,fontWeight:600,color:newStock.symbol===s.symbol?C.blue:C.text}}>{s.name}</span>
+                                  <span style={{background:TYPE_COLOR[s.type]+"18",color:TYPE_COLOR[s.type],fontSize:9,fontWeight:700,borderRadius:3,padding:"1px 4px"}}>{TYPE_LABEL[s.type]}</span>
+                                </div>
+                                <div style={{fontSize:11,color:C.light}}>{s.sector} · 最低{fmt(s.minAmount)}{s.優待?" 🎁":""}</div>
+                              </div>
+                              <div style={{textAlign:"right"}}>
+                                {sp&&<div style={{fontSize:12,fontWeight:700,color:C.text}}>¥{sp.price.toLocaleString()}</div>}
+                                {cp&&<div style={{fontSize:12,fontWeight:700,color:C.text}}>¥{cp.price.toLocaleString()}</div>}
+                                {!sp&&!cp&&<div style={{fontSize:12,color:RISK_COLOR[s.risk],fontWeight:700}}>{fmtPct(s.annualReturn)}／年</div>}
+                                <div style={{fontSize:10,color:RISK_COLOR[s.risk]}}>{RISK_LABEL[s.risk]}</div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>)}
                   </div>
                 )}
               </div>

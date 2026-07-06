@@ -49,7 +49,16 @@ function loadLS(key, fallback) {
     const v = localStorage.getItem(key);
     if (!v) return fallback;
     const parsed = JSON.parse(v);
-    if (key === "kabu_holdings") return parsed.map(h => ({ ...h, stock: STOCKS.find(s => s.symbol === h.stock?.symbol) || h.stock }));
+    if (key === "kabu_holdings") return parsed.map(h => {
+      const stock = STOCKS.find(s => s.symbol === h.stock?.symbol) || h.stock;
+      // purchasePriceの異常値チェック（ドル生値混入バグの修正）
+      let purchasePrice = h.purchasePrice ?? null;
+      if (purchasePrice !== null && h.amount > 0) {
+        const impliedShares = h.amount / purchasePrice;
+        if (impliedShares > 100000) purchasePrice = null; // 異常値はリセット
+      }
+      return { ...h, stock, purchasePrice };
+    });
     if (key === "kabu_simStocks") return parsed.map(sym => STOCKS.find(s => s.symbol === sym) || STOCKS[0]);
     return parsed;
   } catch { return fallback; }
@@ -289,7 +298,7 @@ export default function KabuPlus() {
   const addHolding = () => {
     if(minWarning) return;
     const sp=stockPrices[newStock.symbol];
-    const purchasePrice=sp?.rawPrice??sp?.price??null;
+    const purchasePrice=sp?.price??null; // 常に円建てを使う（rawPrice/ドル生値は使わない）
     const stockToSave = newAnnualReturn !== null
       ? {...newStock, annualReturn: newAnnualReturn}
       : newStock;

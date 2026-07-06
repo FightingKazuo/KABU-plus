@@ -49,8 +49,8 @@ export default async function handler(req, res) {
         }
 
         results[symbol] = {
-          price: priceJPY,
-          rawPrice: price,
+          price: priceJPY,       // 常に円建て（JPY or USD→JPY換算済み）
+          priceRaw: price,       // 元通貨のまま（参考表示用のみ・計算には使わない）
           currency,
           change: parseFloat(change.toFixed(2)),
           marketState: meta.marketState ?? "CLOSED",

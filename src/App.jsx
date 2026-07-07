@@ -210,7 +210,7 @@ function StockList({ stocks, stockPrices, cryptoPrices, onSelect }) {
                 <div style={{textAlign:"right",flexShrink:0}}>
                   {livePrice&&typeof livePrice==="number"?(
                     <>
-                      <div style={{fontSize:13,fontWeight:800,color:C.text}}>¥{livePrice.toLocaleString()}</div>
+                      <div style={{fontSize:13,fontWeight:800,color:C.text}}>¥{Number(livePrice).toLocaleString()}</div>
                       {liveChange!==null&&typeof liveChange==="number"&&<div style={{fontSize:11,color:liveChange>=0?C.green:C.red,fontWeight:600}}>{liveChange>=0?"+":""}{liveChange.toFixed(1)}%</div>}
                       <div style={{fontSize:9,color:C.green,fontWeight:700,marginBottom:4}}>●LIVE</div>
                     </>
@@ -710,7 +710,7 @@ function KabuPlusInner() {
                         </div>
                         <div style={{fontSize:11,color:C.light}}>{h.stock?.sector} · 年率{fmtPct(h.stock?.annualReturn??0)}</div>
                         {h.cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>¥{h.cp?.price?.toLocaleString()} ({h.cp?.change24h>=0?"+":""}{h.cp?.change24h?.toFixed(1)}% 24h) <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
-                        {h.currentPrice&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>¥{h.currentPrice.toLocaleString()} {h.spChange!==undefined&&`(${h.spChange>=0?"+":""}${h.spChange}%)`} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
+                        {h.currentPrice&&typeof h.currentPrice==="number"&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>¥{h.currentPrice.toLocaleString()} {h.spChange!=null&&typeof h.spChange==="number"&&`(${h.spChange>=0?"+":""}${h.spChange.toFixed(1)}%)`} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>年率近似で計算中</div>}
                       </div>
                     </div>

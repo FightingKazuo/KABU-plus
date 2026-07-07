@@ -270,23 +270,18 @@ export default function KabuPlus() {
       }).catch(()=>{});
   },[]);
 
-  // 保有中銘柄のシンボルリスト（変化時のみ再取得）
-  const holdingSymbolsKey = useMemo(()=>
-    [...new Set(holdings.map(h=>h.stock?.symbol).filter(Boolean))].sort().join(",")
-  ,[holdings]);
-
   useEffect(() => {
+    const holdingSymbolsKey = [...new Set(holdings.map(h=>h.stock?.symbol).filter(Boolean))].sort().join(",");
     // 為替レート取得（常時）
     fetch("/api/forex").then(r=>r.json()).then(fx=>{
       const rate = fx.usdJpy ?? 157.0;
       setUsdJpy(rate);
-      // 保有中の株式・米国株のみ取得（投信・仮想通貨は除外）
+      // 保有中の株式のみ取得（投信・仮想通貨は除外）
       const targets = [...new Set(holdings
         .filter(h => h.stock?.type === "jp" || h.stock?.type === "us")
         .map(h => h.stock?.symbol).filter(Boolean))];
       if (targets.length === 0) { setPriceLoading(false); return; }
       setPriceLoading(true); setPriceError(false);
-      // 20銘柄ずつ分割して並列取得
       const chunks = [];
       for (let i = 0; i < targets.length; i += 20) chunks.push(targets.slice(i, i + 20));
       Promise.all(chunks.map(chunk =>
@@ -297,7 +292,8 @@ export default function KabuPlus() {
       }).catch(() => setPriceError(true))
         .finally(() => setPriceLoading(false));
     }).catch(() => setPriceLoading(false));
-  },[holdingSymbolsKey]);
+  // eslint-disable-next-line
+  },[holdings.map(h=>h.stock?.symbol).join(",")]);
 
   useEffect(() => {
     if(!searchMode||stockSearch.length<1){setSearchResults([]);return;}
@@ -313,10 +309,10 @@ export default function KabuPlus() {
   },[stockSearch,searchMode]);
 
   // ── 最低金額チェック ──
-  const effectiveReturn = newAnnualReturn !== null ? newAnnualReturn : newStock.annualReturn;
+  const effectiveReturn = newAnnualReturn !== null ? newAnnualReturn : (newStock?.annualReturn ?? 10);
   const minWarning = useMemo(()=>{
     if(!newAmount||newAmount<=0) return null;
-    if(newAmount<newStock.minAmount) return `最低${fmt(newStock.minAmount)}必要です`;
+    if(newStock?.minAmount && newAmount<newStock.minAmount) return `最低${fmt(newStock.minAmount)}必要です`;
     return null;
   },[newAmount,newStock]);
 
@@ -991,7 +987,15 @@ export default function KabuPlus() {
         </>)}
 
         {/* ════ 銘柄一覧タブ ════ */}
-        {mainTab==="stocks"&&(<StockList stocks={STOCKS} stockPrices={stockPrices} cryptoPrices={cryptoPrices} onSelect={s=>{setNewStock(s);setMainTab("portfolio");setShowAdd(true);}}/>)}
+        {mainTab==="stocks"&&(<StockList stocks={STOCKS} stockPrices={stockPrices} cryptoPrices={cryptoPrices} onSelect={s=>{
+          // 先にstockを設定してからタブ切替（クラッシュ防止）
+          setNewStock(s);
+          setNewAnnualReturn(null);
+          setShowAdd(false); // 一度閉じてからタブ切替
+          setMainTab("portfolio");
+          // 次のレンダリング後に開く
+          setTimeout(()=>setShowAdd(true), 50);
+        }}/>)}
 
       </div>
       <div style={{padding:"0 16px 36px",textAlign:"center"}}>

@@ -270,17 +270,34 @@ export default function KabuPlus() {
       }).catch(()=>{});
   },[]);
 
+  // 保有中銘柄のシンボルリスト（変化時のみ再取得）
+  const holdingSymbolsKey = useMemo(()=>
+    [...new Set(holdings.map(h=>h.stock?.symbol).filter(Boolean))].sort().join(",")
+  ,[holdings]);
+
   useEffect(() => {
-    const symbols = STOCKS.filter(s=>s.type==="jp"||s.type==="us").map(s=>s.symbol).join(",");
-    setPriceLoading(true); setPriceError(false);
+    // 為替レート取得（常時）
     fetch("/api/forex").then(r=>r.json()).then(fx=>{
-      const rate=fx.usdJpy??157.0; setUsdJpy(rate);
-      return fetch(`/api/stock-prices?symbols=${symbols}&usdJpy=${rate}`);
-    }).then(r=>{ if(!r.ok) throw new Error(); return r.json(); })
-      .then(data=>setStockPrices(data))
-      .catch(()=>setPriceError(true))
-      .finally(()=>setPriceLoading(false));
-  },[]);
+      const rate = fx.usdJpy ?? 157.0;
+      setUsdJpy(rate);
+      // 保有中の株式・米国株のみ取得（投信・仮想通貨は除外）
+      const targets = [...new Set(holdings
+        .filter(h => h.stock?.type === "jp" || h.stock?.type === "us")
+        .map(h => h.stock?.symbol).filter(Boolean))];
+      if (targets.length === 0) { setPriceLoading(false); return; }
+      setPriceLoading(true); setPriceError(false);
+      // 20銘柄ずつ分割して並列取得
+      const chunks = [];
+      for (let i = 0; i < targets.length; i += 20) chunks.push(targets.slice(i, i + 20));
+      Promise.all(chunks.map(chunk =>
+        fetch(`/api/stock-prices?symbols=${chunk.join(",")}&usdJpy=${rate}`)
+          .then(r => r.ok ? r.json() : {}).catch(() => ({}))
+      )).then(results => {
+        setStockPrices(prev => ({ ...prev, ...Object.assign({}, ...results) }));
+      }).catch(() => setPriceError(true))
+        .finally(() => setPriceLoading(false));
+    }).catch(() => setPriceLoading(false));
+  },[holdingSymbolsKey]);
 
   useEffect(() => {
     if(!searchMode||stockSearch.length<1){setSearchResults([]);return;}

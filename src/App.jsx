@@ -13,13 +13,13 @@ class ErrorBoundary extends React.Component {
           <div style={{fontSize:32,marginBottom:12}}>⚠️</div>
           <div style={{fontSize:16,fontWeight:700,color:"#1E293B",marginBottom:8}}>表示エラーが発生しました</div>
           <div style={{fontSize:12,color:"#64748B",marginBottom:24}}>{String(this.state.error)}</div>
-          <button onClick={()=>{ localStorage.removeItem("kabu_holdings"); window.location.reload(); }}
-            style={{background:"#2563EB",color:"#fff",border:"none",borderRadius:8,padding:"10px 20px",fontSize:14,cursor:"pointer"}}>
-            データをリセットして再起動
-          </button>
           <button onClick={()=>window.location.reload()}
-            style={{background:"#F1F5F9",color:"#475569",border:"none",borderRadius:8,padding:"10px 20px",fontSize:14,cursor:"pointer",marginLeft:8}}>
-            再読み込み
+            style={{background:"#2563EB",color:"#fff",border:"none",borderRadius:8,padding:"10px 20px",fontSize:14,cursor:"pointer"}}>
+            再読み込み（データ保持）
+          </button>
+          <button onClick={()=>{ if(window.confirm("保有データが削除されます。よろしいですか？")){ localStorage.removeItem("kabu_holdings"); window.location.reload(); } }}
+            style={{background:"#F1F5F9",color:"#DC2626",border:"1px solid #FECACA",borderRadius:8,padding:"10px 20px",fontSize:14,cursor:"pointer",marginLeft:8}}>
+            データ削除して再起動
           </button>
         </div>
       );
@@ -73,9 +73,20 @@ function saveLS(key, value) {
 
 // ── 計算ユーティリティ ───────────────────────────────
 function calcCurrentValue(amount, purchaseDate, annualReturn, currentPrice, purchasePrice) {
-  if (currentPrice && purchasePrice && purchasePrice > 0) return Math.round(amount * (currentPrice / purchasePrice));
-  const years = Math.max(0, (new Date() - new Date(purchaseDate)) / (1000*60*60*24*365.25));
-  return Math.round(amount * Math.pow(1 + annualReturn/100, years));
+  try {
+    const amt = Number(amount) || 0;
+    const ret = Number(annualReturn) || 0;
+    if (currentPrice && purchasePrice && purchasePrice > 0) {
+      return Math.round(amt * (currentPrice / purchasePrice));
+    }
+    const bought = new Date(purchaseDate);
+    if (isNaN(bought.getTime())) return amt;
+    const years = Math.max(0, (new Date() - bought) / (1000*60*60*24*365.25));
+    const result = amt * Math.pow(1 + ret/100, years);
+    return isNaN(result) ? amt : Math.round(result);
+  } catch(e) {
+    return Number(amount) || 0;
+  }
 }
 function simulateMonthly(stock, monthly, months) {
   const r = stock.annualReturn/100/12;
@@ -197,10 +208,10 @@ function StockList({ stocks, stockPrices, cryptoPrices, onSelect }) {
                 </div>
                 {/* 右：株価・ボタン */}
                 <div style={{textAlign:"right",flexShrink:0}}>
-                  {livePrice?(
+                  {livePrice&&typeof livePrice==="number"?(
                     <>
                       <div style={{fontSize:13,fontWeight:800,color:C.text}}>¥{livePrice.toLocaleString()}</div>
-                      {liveChange!==null&&<div style={{fontSize:11,color:liveChange>=0?C.green:C.red,fontWeight:600}}>{liveChange>=0?"+":""}{liveChange.toFixed(1)}%</div>}
+                      {liveChange!==null&&typeof liveChange==="number"&&<div style={{fontSize:11,color:liveChange>=0?C.green:C.red,fontWeight:600}}>{liveChange>=0?"+":""}{liveChange.toFixed(1)}%</div>}
                       <div style={{fontSize:9,color:C.green,fontWeight:700,marginBottom:4}}>●LIVE</div>
                     </>
                   ):(
@@ -483,8 +494,11 @@ function KabuPlusInner() {
 
   // ── シミュからポートフォリオへ連携 ──
   const sendToPortfolio = (stock) => {
+    if (!stock?.symbol) return;
     setNewStock(stock); setNewAnnualReturn(null);
-    setMainTab("portfolio"); setShowAdd(true);
+    setShowAdd(false);
+    setMainTab("portfolio");
+    setTimeout(() => setShowAdd(true), 50);
   };
 
   return (
@@ -695,7 +709,7 @@ function KabuPlusInner() {
                           <span style={{background:TYPE_COLOR[h.stock?.type]+"18",color:TYPE_COLOR[h.stock?.type],fontSize:9,fontWeight:700,borderRadius:3,padding:"1px 4px"}}>{TYPE_LABEL[h.stock?.type]}</span>
                         </div>
                         <div style={{fontSize:11,color:C.light}}>{h.stock?.sector} · 年率{fmtPct(h.stock?.annualReturn??0)}</div>
-                        {h.cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>¥{h.cp.price.toLocaleString()} ({h.cp.change24h>=0?"+":""}{h.cp.change24h.toFixed(1)}% 24h) <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
+                        {h.cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>¥{h.cp?.price?.toLocaleString()} ({h.cp?.change24h>=0?"+":""}{h.cp?.change24h?.toFixed(1)}% 24h) <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {h.currentPrice&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>¥{h.currentPrice.toLocaleString()} {h.spChange!==undefined&&`(${h.spChange>=0?"+":""}${h.spChange}%)`} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>年率近似で計算中</div>}
                       </div>
@@ -754,7 +768,7 @@ function KabuPlusInner() {
                     <div style={{padding:"0 8px 6px"}}>
                       <input value={stockSearch} onChange={e=>setStockSearch(e.target.value)}
                         placeholder={searchMode?"銘柄名・コードで検索（例: トヨタ, AAPL）":"銘柄名・コード・セクター"}
-                        style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} autoFocus/>
+                        style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
                     </div>
                     {searchMode&&(
                       <div style={{maxHeight:260,overflowY:"auto"}}>
@@ -774,7 +788,7 @@ function KabuPlusInner() {
                                 <div style={{fontSize:11,color:C.light}}>{s.symbol} · {s.exchange}</div>
                               </div>
                               <div style={{textAlign:"right"}}>
-                                {sp?<><div style={{fontSize:13,fontWeight:700}}>¥{sp.price.toLocaleString()}</div><div style={{fontSize:11,color:sp.change>=0?C.green:C.red}}>{sp.change>=0?"+":""}{sp.change}%</div></>:<div style={{fontSize:11,color:C.light}}>{s.quoteType}</div>}
+                                {sp?<><div style={{fontSize:13,fontWeight:700}}>¥{sp?.price?.toLocaleString()}</div><div style={{fontSize:11,color:sp?.change>=0?C.green:C.red}}>{sp?.change>=0?"+":""}{sp?.change}%</div></>:<div style={{fontSize:11,color:C.light}}>{s.quoteType}</div>}
                               </div>
                             </div>
                           );
@@ -801,8 +815,8 @@ function KabuPlusInner() {
                                 <div style={{fontSize:11,color:C.light}}>{s.sector} · 最低{fmt(s.minAmount)}{s.優待?" 🎁":""}</div>
                               </div>
                               <div style={{textAlign:"right"}}>
-                                {sp&&<div style={{fontSize:12,fontWeight:700}}>{sp.price.toLocaleString()}円</div>}
-                                {cp&&<div style={{fontSize:12,fontWeight:700}}>{cp.price.toLocaleString()}円</div>}
+                                {sp&&<div style={{fontSize:12,fontWeight:700}}>{sp?.price?.toLocaleString()}円</div>}
+                                {cp&&<div style={{fontSize:12,fontWeight:700}}>{cp?.price?.toLocaleString()}円</div>}
                                 {!sp&&!cp&&<div style={{fontSize:12,color:RISK_COLOR[s.risk],fontWeight:700}}>{fmtPct(s.annualReturn)}／年</div>}
                                 <div style={{fontSize:10,color:RISK_COLOR[s.risk]}}>{RISK_LABEL[s.risk]}</div>
                               </div>
@@ -912,7 +926,7 @@ function KabuPlusInner() {
               <div style={{marginTop:12,background:C.bg,borderRadius:10,border:`1px solid ${C.border}`,overflow:"hidden"}}>
                 <div style={{padding:10}}>
                   <input value={simSearch} onChange={e=>setSimSearch(e.target.value)} placeholder="銘柄名・コード・セクター"
-                    style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,padding:"8px 12px",fontSize:13,boxSizing:"border-box"}} autoFocus/>
+                    style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,padding:"8px 12px",fontSize:13,boxSizing:"border-box"}}/>
                 </div>
                 <div style={{maxHeight:260,overflowY:"auto"}}>
                   {filteredSimStocks.map(s=>{
@@ -928,8 +942,8 @@ function KabuPlusInner() {
                           <div style={{fontSize:11,color:C.light}}>{s.sector} · 最低{fmt(s.minAmount)}{s.優待?" 🎁":""}</div>
                         </div>
                         <div style={{textAlign:"right"}}>
-                          {sp&&<div style={{fontSize:12,fontWeight:700}}>{sp.price.toLocaleString()}円</div>}
-                          {cp&&<div style={{fontSize:12,fontWeight:700}}>{cp.price.toLocaleString()}円</div>}
+                          {sp&&<div style={{fontSize:12,fontWeight:700}}>{sp?.price?.toLocaleString()}円</div>}
+                          {cp&&<div style={{fontSize:12,fontWeight:700}}>{cp?.price?.toLocaleString()}円</div>}
                           <div style={{fontSize:11,color:RISK_COLOR[s.risk]}}>{fmtPct(s.annualReturn)}／年</div>
                         </div>
                       </div>

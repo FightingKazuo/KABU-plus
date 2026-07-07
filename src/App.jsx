@@ -1,5 +1,32 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
 import { STOCKS } from "./stocks";
+
+// ── Error Boundary（クラッシュ時に白画面を防ぐ）──────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(e) { return { hasError: true, error: e }; }
+  componentDidCatch(e, info) { console.error("App crashed:", e, info); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{padding:32,textAlign:"center",fontFamily:"sans-serif"}}>
+          <div style={{fontSize:32,marginBottom:12}}>⚠️</div>
+          <div style={{fontSize:16,fontWeight:700,color:"#1E293B",marginBottom:8}}>表示エラーが発生しました</div>
+          <div style={{fontSize:12,color:"#64748B",marginBottom:24}}>{String(this.state.error)}</div>
+          <button onClick={()=>{ localStorage.removeItem("kabu_holdings"); window.location.reload(); }}
+            style={{background:"#2563EB",color:"#fff",border:"none",borderRadius:8,padding:"10px 20px",fontSize:14,cursor:"pointer"}}>
+            データをリセットして再起動
+          </button>
+          <button onClick={()=>window.location.reload()}
+            style={{background:"#F1F5F9",color:"#475569",border:"none",borderRadius:8,padding:"10px 20px",fontSize:14,cursor:"pointer",marginLeft:8}}>
+            再読み込み
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, ReferenceLine } from "recharts";
 
 
@@ -205,7 +232,7 @@ const SAMPLE_HOLDINGS = [
 ];
 
 // ════════════════════════════════════════════════════════
-export default function KabuPlus() {
+function KabuPlusInner() {
   const [mainTab, setMainTab] = useState("portfolio");
 
   // ── ポートフォリオ ──
@@ -318,17 +345,24 @@ export default function KabuPlus() {
 
   // ── ポートフォリオ計算 ──
   const portfolioStats = useMemo(()=>
-    holdings.map(h=>{
-      const sp=stockPrices[h.stock?.symbol];
-      const cp=cryptoPrices[h.stock?.symbol];
-      const currentValue=calcCurrentValue(h.amount,h.purchaseDate,h.stock?.annualReturn??10,sp?.price??null,h.purchasePrice??null);
-      const gain=currentValue-h.amount;
-      const gainPct=(currentValue/h.amount-1)*100;
-      const days=Math.floor((new Date()-new Date(h.purchaseDate))/(1000*60*60*24));
-      const isLive=!!(sp||cp);
-      return {...h,currentValue,gain,gainPct,days,isLive,currentPrice:sp?.price??null,cp,spChange:sp?.change};
-    })
-  ,[holdings,cryptoPrices,stockPrices]);
+    holdings
+      .filter(h => h?.stock?.symbol && h?.amount > 0) // 不正データを除外
+      .map(h=>{
+        try {
+          const sp = stockPrices[h.stock.symbol];
+          const cp = cryptoPrices[h.stock.symbol];
+          const currentValue = calcCurrentValue(h.amount, h.purchaseDate, h.stock.annualReturn ?? 10, sp?.price ?? null, h.purchasePrice ?? null);
+          const gain    = currentValue - h.amount;
+          const gainPct = h.amount > 0 ? (currentValue / h.amount - 1) * 100 : 0;
+          const days    = Math.max(0, Math.floor((new Date() - new Date(h.purchaseDate)) / (1000*60*60*24)));
+          const isLive  = !!(sp || cp);
+          return { ...h, currentValue, gain, gainPct, days, isLive, currentPrice: sp?.price ?? null, cp: cp ?? null, spChange: sp?.change ?? null };
+        } catch(e) {
+          // 計算エラーは安全なデフォルト値で返す
+          return { ...h, currentValue: h.amount, gain: 0, gainPct: 0, days: 0, isLive: false, currentPrice: null, cp: null, spChange: null };
+        }
+      })
+  ,[holdings, cryptoPrices, stockPrices]);
 
   // ── 銘柄ごと集計 ──
   const groupedStats = useMemo(()=>{
@@ -393,11 +427,21 @@ export default function KabuPlus() {
   // ── addHolding ──
   const addHolding = () => {
     if(minWarning) return;
-    const sp=stockPrices[newStock.symbol];
-    const purchasePrice=sp?.price??null; // 常に円建てを使う（rawPrice/ドル生値は使わない）
-    const stockToSave = newAnnualReturn !== null
-      ? {...newStock, annualReturn: newAnnualReturn}
-      : newStock;
+    if(!newStock?.symbol || !newStock?.name) return; // 不正なstockはガード
+    const sp = stockPrices[newStock.symbol];
+    const purchasePrice = sp?.price ?? null;
+    const stockToSave = {
+      symbol:      newStock.symbol,
+      name:        newStock.name,
+      sector:      newStock.sector ?? "",
+      type:        newStock.type ?? "us",
+      annualReturn: newAnnualReturn !== null ? newAnnualReturn : (newStock.annualReturn ?? 10),
+      dividend:    newStock.dividend ?? 0,
+      minAmount:   newStock.minAmount ?? 0,
+      unitShares:  newStock.unitShares ?? null,
+      優待:        newStock.優待 ?? null,
+      risk:        newStock.risk ?? "medium",
+    };
     setHoldings(p=>[...p,{id:Date.now(),stock:stockToSave,purchaseDate:newDate,amount:newAmount,purchasePrice}]);
     setShowAdd(false); setStockSearch(""); setSearchResults([]); setSearchMode(false); setNewAnnualReturn(null);
   };
@@ -1003,4 +1047,8 @@ export default function KabuPlus() {
       </div>
     </div>
   );
+}
+
+export default function KabuPlus() {
+  return <ErrorBoundary><KabuPlusInner /></ErrorBoundary>;
 }

@@ -1,95 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { STOCKS } from "./stocks";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, ReferenceLine } from "recharts";
 
-const STOCKS = [
-  // ── 投信・インデックスファンド ──
-  { symbol:"eMAXIS-SP500", name:"eMAXIS Slim 米国株式(S&P500)", sector:"投信", type:"fund", annualReturn:18.5, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium",
-    desc:"米国の大企業500社に分散投資。初心者に最もおすすめ。", tags:["初心者向け","分散投資","積立NISA"] },
-  { symbol:"eMAXIS-ALL", name:"eMAXIS Slim 全世界株式", sector:"投信", type:"fund", annualReturn:14.2, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium",
-    desc:"世界中の株に一括投資。これ1本で世界分散が完成。", tags:["初心者向け","全世界","積立NISA"] },
-  { symbol:"SBI-SP500", name:"SBI・V・S&P500インデックス", sector:"投信", type:"fund", annualReturn:18.3, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium",
-    desc:"S&P500に超低コストで投資できるSBI版。", tags:["低コスト","積立NISA","人気"] },
-  { symbol:"eMAXIS-NASDAQ", name:"eMAXIS Slim 米国株式(NASDAQ100)", sector:"投信", type:"fund", annualReturn:22.4, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"high",
-    desc:"GAFAMなどIT大手100社に集中投資。高リターン狙い。", tags:["成長株","テクノロジー","ハイリスク"] },
-  { symbol:"NIKKEI225", name:"eMAXIS Slim 国内株式(日経225)", sector:"投信", type:"fund", annualReturn:9.4, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"medium",
-    desc:"日本を代表する225社への投資。円建てで安心感あり。", tags:["日本株","円建て","安定"] },
-  { symbol:"FANG-PLUS", name:"iFreeNEXT FANG+インデックス", sector:"投信", type:"fund", annualReturn:32.1, dividend:0, minAmount:100, unitShares:null, 優待:null, risk:"high",
-    desc:"GAFAM＋注目テック10社に集中。ハイリスク・ハイリターン。", tags:["集中投資","テクノロジー","ハイリスク"] },
-  { symbol:"SBI-HAITOU", name:"SBI・V・米国高配当株式", sector:"投信", type:"fund", annualReturn:11.2, dividend:3.1, minAmount:100, unitShares:null, 優待:null, risk:"low",
-    desc:"配当収入を重視した米国株ファンド。安定収入を求める方に。", tags:["高配当","安定収入","低リスク"] },
-  { symbol:"eMAXIS-REIT", name:"eMAXIS Slim 国内リート", sector:"投信", type:"fund", annualReturn:7.3, dividend:3.8, minAmount:100, unitShares:null, 優待:null, risk:"medium",
-    desc:"不動産への間接投資。高い分配金が魅力。", tags:["不動産","高配当","インフレ対策"] },
-
-  // ── 国内個別株 ──
-  { symbol:"7203.T", name:"トヨタ自動車", sector:"自動車", type:"jp", annualReturn:12.4, dividend:2.8, minAmount:358000, unitShares:100, 優待:"自社製品割引", risk:"medium",
-    desc:"世界最大級の自動車メーカー。EV転換中。安定した日本の顔。", tags:["日本代表","配当あり","優待あり"] },
-  { symbol:"6758.T", name:"ソニーグループ", sector:"電機", type:"jp", annualReturn:18.2, dividend:0.6, minAmount:142000, unitShares:100, 優待:null, risk:"medium",
-    desc:"PS・カメラ・音楽・映画。多様な事業で成長続ける。", tags:["エンタメ","成長株","グローバル"] },
-  { symbol:"9984.T", name:"ソフトバンクG", sector:"通信/投資", type:"jp", annualReturn:8.1, dividend:2.2, minAmount:89500, unitShares:100, 優待:null, risk:"high",
-    desc:"AIベンチャーへの大規模投資。ハイリスクだが話題性抜群。", tags:["AI投資","ハイリスク","話題性"] },
-  { symbol:"8306.T", name:"三菱UFJフィナンシャル", sector:"金融", type:"jp", annualReturn:9.3, dividend:3.2, minAmount:14850, unitShares:100, 優待:null, risk:"low",
-    desc:"日本最大の銀行グループ。金利上昇局面で注目度アップ。", tags:["金融","高配当","低リスク"] },
-  { symbol:"2914.T", name:"日本たばこ産業(JT)", sector:"食品", type:"jp", annualReturn:5.8, dividend:5.6, minAmount:42800, unitShares:100, 優待:"自社製品", risk:"low",
-    desc:"配当利回り5%超の高配当銘柄。安定したキャッシュフロー。", tags:["超高配当","安定収入","優待あり"] },
-  { symbol:"9432.T", name:"NTT", sector:"通信", type:"jp", annualReturn:7.6, dividend:3.1, minAmount:1780, unitShares:100, 優待:"dポイント", risk:"low",
-    desc:"1株約18円から買える。少額から始めたい人に最適。", tags:["少額投資","安定","優待あり"] },
-  { symbol:"3382.T", name:"セブン&アイHD", sector:"小売", type:"jp", annualReturn:6.1, dividend:2.4, minAmount:21800, unitShares:100, 優待:"商品券", risk:"low",
-    desc:"セブンイレブン・イトーヨーカドーを展開。生活密着型。", tags:["生活必需品","優待あり","安定"] },
-  { symbol:"4502.T", name:"武田薬品工業", sector:"医薬品", type:"jp", annualReturn:4.2, dividend:4.8, minAmount:42500, unitShares:100, 優待:null, risk:"low",
-    desc:"日本最大の製薬会社。高配当で守りの投資に向く。", tags:["医薬品","高配当","ディフェンシブ"] },
-  { symbol:"4063.T", name:"信越化学工業", sector:"化学", type:"jp", annualReturn:14.7, dividend:1.8, minAmount:582000, unitShares:100, 優待:null, risk:"medium",
-    desc:"半導体素材で世界トップ。半導体ブームの恩恵を受ける。", tags:["半導体","成長株","グローバル"] },
-  { symbol:"6861.T", name:"キーエンス", sector:"精密機器", type:"jp", annualReturn:16.2, dividend:0.3, minAmount:7310000, unitShares:100, 優待:null, risk:"medium",
-    desc:"超高収益の産業用センサーメーカー。株価は高いが実力も高い。", tags:["高収益","成長株","FA自動化"] },
-  { symbol:"7974.T", name:"任天堂", sector:"ゲーム", type:"jp", annualReturn:11.8, dividend:2.1, minAmount:840000, unitShares:100, 優待:null, risk:"medium",
-    desc:"マリオ・ポケモン・スイッチ。世界的IPで安定成長。", tags:["ゲーム","エンタメ","グローバルIP"] },
-  { symbol:"4755.T", name:"楽天グループ", sector:"IT/通信", type:"jp", annualReturn:3.2, dividend:0, minAmount:9700, unitShares:100, 優待:null, risk:"high",
-    desc:"EC・金融・モバイルの総合サービス。再建中で高リスク高期待。", tags:["ハイリスク","再建中","モバイル"] },
-  { symbol:"3769.T", name:"GMOペイメントG", sector:"IT/決済", type:"jp", annualReturn:13.4, dividend:1.2, minAmount:51200, unitShares:100, 優待:null, risk:"medium",
-    desc:"キャッシュレス決済で成長。フィンテック関連の注目株。", tags:["フィンテック","成長株","キャッシュレス"] },
-  { symbol:"2502.T", name:"アサヒグループHD", sector:"食品", type:"jp", annualReturn:7.8, dividend:2.1, minAmount:23400, unitShares:100, 優待:"自社製品", risk:"low",
-    desc:"スーパードライなど国内外にブランドを持つ飲料大手。", tags:["食品","優待あり","安定"] },
-  { symbol:"9020.T", name:"東日本旅客鉄道(JR東日本)", sector:"鉄道", type:"jp", annualReturn:5.4, dividend:2.0, minAmount:273000, unitShares:100, 優待:"乗車割引", risk:"low",
-    desc:"鉄道・ホテル・商業施設。インバウンド回復で注目。", tags:["インフラ","優待あり","安定"] },
-
-  // ── 米国個別株・ETF ──
-  { symbol:"AAPL", name:"Apple", sector:"テクノロジー", type:"us", annualReturn:22.1, dividend:0.5, minAmount:32000, unitShares:1, 優待:null, risk:"medium",
-    desc:"iPhone・Mac・サービスで世界最大の時価総額企業。", tags:["超有名","テクノロジー","安定成長"] },
-  { symbol:"MSFT", name:"Microsoft", sector:"テクノロジー", type:"us", annualReturn:19.8, dividend:0.7, minAmount:64000, unitShares:1, 優待:null, risk:"medium",
-    desc:"Windows・Azure・ChatGPT投資元。AI時代の本命。", tags:["AI","クラウド","安定成長"] },
-  { symbol:"NVDA", name:"NVIDIA", sector:"半導体", type:"us", annualReturn:87.2, dividend:0.03, minAmount:20000, unitShares:1, 優待:null, risk:"high",
-    desc:"AI用GPUで世界独占。ChatGPTブームの最大受益者。", tags:["AI","爆発的成長","ハイリスク"] },
-  { symbol:"TSLA", name:"Tesla", sector:"EV/エネルギー", type:"us", annualReturn:31.5, dividend:0, minAmount:37000, unitShares:1, 優待:null, risk:"high",
-    desc:"EV世界トップ。イーロン・マスク率いる革新企業。", tags:["EV","成長株","ハイリスク"] },
-  { symbol:"AMZN", name:"Amazon", sector:"EC/クラウド", type:"us", annualReturn:24.3, dividend:0, minAmount:28000, unitShares:1, 優待:null, risk:"medium",
-    desc:"EC・AWS・広告。多角化で安定成長を続ける。", tags:["クラウド","EC","成長株"] },
-  { symbol:"GOOGL", name:"Alphabet(Google)", sector:"テクノロジー", type:"us", annualReturn:21.7, dividend:0, minAmount:26000, unitShares:1, 優待:null, risk:"medium",
-    desc:"検索・YouTube・Android。生活に欠かせないプラットフォーム。", tags:["広告","AI","安定成長"] },
-  { symbol:"META", name:"Meta Platforms", sector:"SNS", type:"us", annualReturn:28.4, dividend:0.4, minAmount:88000, unitShares:1, 優待:null, risk:"medium",
-    desc:"Facebook・Instagram・WhatsApp。SNS広告の巨人。", tags:["SNS","AI投資","成長株"] },
-  { symbol:"BRK-B", name:"Berkshire Hathaway B", sector:"投資会社", type:"us", annualReturn:12.8, dividend:0, minAmount:60000, unitShares:1, 優待:null, risk:"low",
-    desc:"投資の神様バフェットが率いる投資会社。安定の王様。", tags:["安定","バフェット","長期投資"] },
-  { symbol:"JPM", name:"JPMorgan Chase", sector:"金融", type:"us", annualReturn:14.2, dividend:2.4, minAmount:36000, unitShares:1, 優待:null, risk:"low",
-    desc:"米国最大の銀行。金利上昇の恩恵を受ける安定株。", tags:["金融","高配当","安定"] },
-  { symbol:"VOO", name:"Vanguard S&P500 ETF", sector:"ETF", type:"us", annualReturn:13.2, dividend:1.4, minAmount:77000, unitShares:1, 優待:null, risk:"medium",
-    desc:"S&P500に連動するETF。eMAXIS SlimのETF版。", tags:["ETF","分散投資","初心者向け"] },
-  { symbol:"QQQ", name:"Invesco QQQ ETF", sector:"ETF", type:"us", annualReturn:20.1, dividend:0.6, minAmount:68000, unitShares:1, 優待:null, risk:"high",
-    desc:"NASDAQ100に連動。テクノロジー株に集中投資するETF。", tags:["ETF","テクノロジー","成長"] },
-  { symbol:"VYM", name:"Vanguard 高配当ETF", sector:"ETF", type:"us", annualReturn:10.2, dividend:3.2, minAmount:17000, unitShares:1, 優待:null, risk:"low",
-    desc:"米国の高配当株に分散投資。安定した配当収入が魅力。", tags:["ETF","高配当","安定収入"] },
-  { symbol:"SPYD", name:"SPDR S&P500 高配当ETF", sector:"ETF", type:"us", annualReturn:9.8, dividend:4.5, minAmount:5800, unitShares:1, 優待:null, risk:"low",
-    desc:"配当利回り4%超。少額から高配当投資ができるETF。", tags:["ETF","超高配当","少額OK"] },
-
-  // ── 仮想通貨 ──
-  { symbol:"BTC", name:"Bitcoin", sector:"仮想通貨", type:"crypto", annualReturn:80.0, dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"bitcoin",
-    desc:"仮想通貨の王様。発行上限2100万枚で希少性がある。", tags:["仮想通貨","希少性","ハイリスク"] },
-  { symbol:"ETH", name:"Ethereum", sector:"仮想通貨", type:"crypto", annualReturn:60.0, dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"ethereum",
-    desc:"スマートコントラクトの基盤。DeFi・NFTの土台となる通貨。", tags:["仮想通貨","Web3","ハイリスク"] },
-  { symbol:"SOL", name:"Solana", sector:"仮想通貨", type:"crypto", annualReturn:120.0, dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"solana",
-    desc:"高速・低コストなブロックチェーン。ETHの競合として急成長。", tags:["仮想通貨","高速","超ハイリスク"] },
-  { symbol:"XRP", name:"XRP(リップル)", sector:"仮想通貨", type:"crypto", annualReturn:40.0, dividend:0, minAmount:500, unitShares:null, 優待:null, risk:"very-high", cgId:"ripple",
-    desc:"国際送金の効率化を目指す通貨。銀行との提携で注目。", tags:["仮想通貨","送金","法的リスク"] },
-]
 
 const TYPE_LABEL = { fund:"投信", jp:"国内株", us:"米国株", crypto:"仮想通貨" };
 const TYPE_COLOR = { fund:"#7C3AED", jp:"#2563EB", us:"#059669", crypto:"#F59E0B" };
@@ -153,7 +65,7 @@ function simulateLumpSum(stock, amount, yrs) {
   return Array.from({length:yrs+1},(_,y)=>({ year:`${y}年`, invested:amount, value:Math.round(amount*Math.pow(1+r,y)) }));
 }
 
-const fmt    = n => n>=10000 ? `${(n/10000).toFixed(1)}万円` : `${n.toLocaleString()}円`;
+const fmt    = n => n>=100000000 ? `${(n/100000000).toFixed(2)}億円` : `${Math.round(n).toLocaleString()}円`;
 const fmtPct = n => (n>=0?"+":"")+n.toFixed(1)+"%";
 const today  = () => new Date().toISOString().split("T")[0];
 
@@ -347,7 +259,7 @@ export default function KabuPlus() {
 
   // ── API取得 ──
   useEffect(() => {
-    const ids = STOCKS.filter(s=>s.type==="crypto").map(s=>s.cgId).join(",");
+    const ids = STOCKS.filter(s=>s.type==="crypto"&&s.cgId).map(s=>s.cgId).join(",");
     fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=jpy&include_24hr_change=true`)
       .then(r=>r.json()).then(data=>{
         const prices={};

@@ -475,8 +475,13 @@ function KabuPlusInner() {
   useEffect(() => {
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") refreshAllPrices();
-    }, 60000);
-    return () => clearInterval(timer);
+    }, 30000);
+    // 画面復帰時に即更新
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshAllPrices();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [refreshAllPrices]);
 
   // ════ ④ 日次スナップショット記録 ════
@@ -823,7 +828,7 @@ function KabuPlusInner() {
             )}
             {/* 最終更新時刻＋手動更新 */}
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
-              {lastUpdate&&<span style={{fontSize:10,color:"#93C5FD"}}>🔄 {lastUpdate.toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}更新 · 60秒毎に自動更新</span>}
+              {lastUpdate&&<span style={{fontSize:10,color:"#93C5FD"}}>🔄 {lastUpdate.toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}更新 · 30秒毎に自動更新</span>}
               <button onClick={refreshAllPrices} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:5,color:"#fff",fontSize:10,fontWeight:600,padding:"2px 8px",cursor:"pointer"}}>今すぐ更新</button>
             </div>
 
@@ -1027,7 +1032,7 @@ function KabuPlusInner() {
                         {h.cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>¥{h.cp?.price?.toLocaleString()} ({h.cp?.change24h>=0?"+":""}{h.cp?.change24h?.toFixed(1)}% 24h) <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {h.currentPrice&&typeof h.currentPrice==="number"&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>¥{h.currentPrice.toLocaleString()} {h.spChange!=null&&typeof h.spChange==="number"&&`(${h.spChange>=0?"+":""}${h.spChange.toFixed(1)}%)`} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {h.fp?.price&&typeof h.fp.price==="number"&&<div style={{fontSize:11,color:"#7C3AED",marginTop:1}}>基準価額: ¥{h.fp.price.toLocaleString()} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
-                        {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>年率近似で計算中（基準価額取得待ち）</div>}
+                        {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>年率近似で計算中（{h.stock?.type==="fund"?"基準価額":"株価"}取得待ち・30秒毎に再試行）</div>}
                       </div>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>

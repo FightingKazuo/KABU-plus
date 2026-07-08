@@ -604,8 +604,9 @@ function KabuPlusInner() {
           const sp = stockPrices[h.stock.symbol];
           const cp = cryptoPrices[h.stock.symbol];
           const fp = fundPrices[h.stock.symbol];
-          // 優先度: 株価API > 投信基準価額 > 年率近似
-          const livePrice = sp?.price ?? fp?.price ?? null;
+          // 現在価格: 株価 > 仮想通貨 > 投信基準価額
+          const livePrice = sp?.price ?? cp?.price ?? fp?.price ?? null;
+          // 購入時価格があれば実際の価格比率で損益計算（＝本当に買った場合と同じ）
           const currentValue = calcCurrentValue(h.amount, h.purchaseDate, h.stock.annualReturn ?? 10, livePrice, h.purchasePrice ?? null);
           const gain    = currentValue - h.amount;
           const gainPct = h.amount > 0 ? (currentValue / h.amount - 1) * 100 : 0;
@@ -702,11 +703,13 @@ function KabuPlusInner() {
   },[holdings,goalAmount]);
 
   // ── addHolding ──
-  const addHolding = () => {
-    if(minWarning) return;
-    if(!newStock?.symbol || !newStock?.name) return; // 不正なstockはガード
-    const sp = stockPrices[newStock.symbol];
-    const purchasePrice = sp?.price ?? null;
+  const [addingHolding, setAddingHolding] = useState(false);
+
+  const addHolding = async () => {
+    if(minWarning || addingHolding) return;
+    if(!newStock?.symbol || !newStock?.name) return;
+    setAddingHolding(true);
+
     const stockToSave = {
       symbol:      newStock.symbol,
       name:        newStock.name,
@@ -718,8 +721,57 @@ function KabuPlusInner() {
       unitShares:  newStock.unitShares ?? null,
       優待:        newStock.優待 ?? null,
       risk:        newStock.risk ?? "medium",
+      fundCode:    newStock.fundCode ?? null,
+      mufgCd:      newStock.mufgCd ?? null,
+      cgId:        newStock.cgId ?? null,
     };
-    setHoldings(p=>[...p,{id:Date.now(),stock:stockToSave,purchaseDate:newDate,amount:newAmount,purchasePrice}]);
+
+    // ★購入時価格を必ず取得してから記録（実際の取引と同じ精度にする）
+    let purchasePrice = null;
+    try {
+      if (stockToSave.type === "jp" || stockToSave.type === "us") {
+        // キャッシュ済みならそれを使用、なければAPIで取得
+        purchasePrice = stockPrices[stockToSave.symbol]?.price ?? null;
+        if (!purchasePrice) {
+          const r = await fetch(`/api/stock-prices?symbols=${stockToSave.symbol}&usdJpy=${usdJpy ?? 157}`);
+          if (r.ok) {
+            const data = await r.json();
+            purchasePrice = data[stockToSave.symbol]?.price ?? null;
+          }
+        }
+      } else if (stockToSave.type === "crypto" && stockToSave.cgId) {
+        purchasePrice = cryptoPrices[stockToSave.symbol]?.price ?? null;
+        if (!purchasePrice) {
+          const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${stockToSave.cgId}&vs_currencies=jpy`);
+          if (r.ok) {
+            const data = await r.json();
+            purchasePrice = data[stockToSave.cgId]?.jpy ?? null;
+          }
+        }
+      } else if (stockToSave.type === "fund") {
+        purchasePrice = fundPrices[stockToSave.symbol]?.price ?? null;
+        if (!purchasePrice) {
+          const code = stockToSave.fundCode ?? (/^[0-9A-Z]{8}$/.test(stockToSave.symbol) ? stockToSave.symbol : null);
+          if (code) {
+            const r = await fetch(`/api/fund-prices?codes=${code}&names=${encodeURIComponent(stockToSave.name)}&mufg=${stockToSave.mufgCd ?? "-"}`);
+            if (r.ok) {
+              const data = await r.json();
+              purchasePrice = data[code]?.price ?? null;
+            }
+          }
+        }
+      }
+    } catch {}
+
+    setHoldings(p=>[...p,{
+      id: Date.now(),
+      stock: stockToSave,
+      purchaseDate: newDate,
+      amount: newAmount,
+      purchasePrice,           // 円建て購入時価格（取得できた場合）
+      priceSource: purchasePrice ? "live" : "approx", // 損益計算の根拠を記録
+    }]);
+    setAddingHolding(false);
     setShowAdd(false); setStockSearch(""); setSearchResults([]); setSearchMode(false); setNewAnnualReturn(null);
   };
 
@@ -1038,6 +1090,7 @@ function KabuPlusInner() {
                         {h.currentPrice&&typeof h.currentPrice==="number"&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>¥{h.currentPrice.toLocaleString()} {h.spChange!=null&&typeof h.spChange==="number"&&`(${h.spChange>=0?"+":""}${h.spChange.toFixed(1)}%)`} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {h.fp?.price&&typeof h.fp.price==="number"&&<div style={{fontSize:11,color:"#7C3AED",marginTop:1}}>基準価額: ¥{h.fp.price.toLocaleString()} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>年率近似で計算中（{h.stock?.type==="fund"?"基準価額":"株価"}取得待ち・30秒毎に再試行）</div>}
+                        {h.purchasePrice&&h.isLive&&<div style={{fontSize:9,color:C.green,marginTop:1}}>✓ 実際の価格比率で計算中（購入時: ¥{Number(h.purchasePrice).toLocaleString()}）</div>}
                       </div>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
@@ -1219,7 +1272,7 @@ function KabuPlusInner() {
 
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>{setShowAdd(false);setStockSearch("");setNewAnnualReturn(null);}} style={{flex:1,background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,color:C.mid,fontSize:13,fontWeight:600,padding:"11px 0",cursor:"pointer"}}>キャンセル</button>
-                <button onClick={addHolding} disabled={!!minWarning} style={{flex:2,background:minWarning?C.light:C.blue,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,padding:"11px 0",cursor:minWarning?"not-allowed":"pointer"}}>記録する</button>
+                <button onClick={addHolding} disabled={!!minWarning||addingHolding} style={{flex:2,background:(minWarning||addingHolding)?C.light:C.blue,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,padding:"11px 0",cursor:(minWarning||addingHolding)?"not-allowed":"pointer"}}>{addingHolding?"価格取得中...":"記録する"}</button>
               </div>
             </div>
           )}

@@ -1,98 +1,132 @@
 // api/fund-prices.js
-// 投資信託の基準価額をYahoo!ファイナンス(日本)から取得
-// codes: 投信コード(カンマ区切り) / names: 銘柄名(コード解決失敗時の検索用・|区切り)
+// 投信の基準価額をマルチソースで取得
+// ソース1: 三菱UFJアセット公式API（eMAXIS系・確実）
+// ソース2: Yahoo!ファイナンスJP スクレイピング
+// ソース3: minkabu スクレイピング（フォールバック）
 
-const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-function extractPrice(html) {
-  let price = null;
-  let change = null;
+// ── ソース1: MUFG公式API（eMAXIS系）──
+async function fetchMufg(fundCd) {
+  try {
+    const url = `https://developer.am.mufg.jp/fund_information_latest/fund_cd/${fundCd}`;
+    const r = await fetch(url, { headers: { "User-Agent": UA, "Accept": "application/json" } });
+    if (!r.ok) return null;
+    const data = await r.json();
+    const item = data?.datasets?.[0] ?? data?.[0] ?? data;
+    const price = parseFloat(item?.nav ?? item?.base_price ?? 0);
+    const change = parseFloat(item?.percentage_change ?? item?.change_rate ?? 0);
+    return price > 1000 ? { price, change: change || 0, source: "mufg" } : null;
+  } catch { return null; }
+}
 
-  // パターン1: __PRELOADED_STATE__
+// ── ソース2: Yahoo JP ──
+function extractYahooPrice(html) {
+  let price = null, change = null;
   const stateMatch = html.match(/__PRELOADED_STATE__\s*=\s*({.+?})<\/script>/s);
   if (stateMatch) {
     try {
       const state = JSON.parse(stateMatch[1]);
-      const detail = state?.mainFundPriceBoard ?? state?.fund ?? {};
-      const board = detail?.fundPriceBoard ?? detail;
+      const board = state?.mainFundPriceBoard?.fundPriceBoard ?? state?.mainFundPriceBoard ?? {};
       if (board?.price) {
         price = parseFloat(String(board.price).replace(/,/g, ""));
         change = board.priceChangeRate ? parseFloat(String(board.priceChangeRate).replace(/[+%]/g, "")) : null;
       }
     } catch {}
   }
-
-  // パターン2: "基準価額 12,345円"
   if (!price) {
     const m = html.match(/基準価[額格][^0-9]*([0-9,]+)\s*円/);
     if (m) price = parseFloat(m[1].replace(/,/g, ""));
   }
-
-  // パターン3: メタ情報から
-  if (!price) {
-    const m = html.match(/content="[^"]*?([0-9]{1,3}(?:,[0-9]{3})+)\s*円/);
-    if (m) price = parseFloat(m[1].replace(/,/g, ""));
-  }
-
-  return price && !isNaN(price) && price > 1000 ? { price, change: change ?? 0 } : null;
+  return price && price > 1000 ? { price, change: change ?? 0, source: "yahoo-jp" } : null;
 }
 
-// 銘柄名からYahoo!ファイナンス検索で投信コードを解決
-async function resolveFundCode(name) {
+async function fetchYahoo(code) {
   try {
-    const url = `https://finance.yahoo.co.jp/search/?query=${encodeURIComponent(name)}`;
-    const response = await fetch(url, { headers: { "User-Agent": UA, "Accept-Language": "ja-JP" } });
-    if (!response.ok) return null;
-    const html = await response.text();
+    const r = await fetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(code)}`, {
+      headers: { "User-Agent": UA, "Accept": "text/html", "Accept-Language": "ja-JP" },
+    });
+    if (!r.ok) return null;
+    return extractYahooPrice(await r.text());
+  } catch { return null; }
+}
+
+async function resolveYahooCode(name) {
+  try {
+    const r = await fetch(`https://finance.yahoo.co.jp/search/?query=${encodeURIComponent(name)}`, {
+      headers: { "User-Agent": UA, "Accept-Language": "ja-JP" },
+    });
+    if (!r.ok) return null;
+    const html = await r.text();
     const m = html.match(/\/quote\/([0-9A-Z]{8})(?:[^0-9A-Z]|")/);
     return m ? m[1] : null;
   } catch { return null; }
 }
 
-async function fetchFundPrice(code) {
+// ── ソース3: minkabu（名前検索→基準価額）──
+async function fetchMinkabu(name) {
   try {
-    const url = `https://finance.yahoo.co.jp/quote/${encodeURIComponent(code)}`;
-    const response = await fetch(url, {
-      headers: { "User-Agent": UA, "Accept": "text/html", "Accept-Language": "ja-JP,ja;q=0.9" },
+    const sr = await fetch(`https://itf.minkabu.jp/search?fund_name=${encodeURIComponent(name)}`, {
+      headers: { "User-Agent": UA, "Accept-Language": "ja-JP" },
     });
-    if (!response.ok) return null;
-    const html = await response.text();
-    return extractPrice(html);
+    if (!sr.ok) return null;
+    const searchHtml = await sr.text();
+    // /fund/JPXXXXXXXXXX 形式のISINリンクを抽出
+    const m = searchHtml.match(/\/fund\/(JP[0-9A-Z]{10})/);
+    if (!m) return null;
+    const fr = await fetch(`https://itf.minkabu.jp/fund/${m[1]}`, {
+      headers: { "User-Agent": UA, "Accept-Language": "ja-JP" },
+    });
+    if (!fr.ok) return null;
+    const html = await fr.text();
+    // 基準価額パターン
+    const pm = html.match(/基準価[額格][^0-9]*([0-9,]+)/);
+    if (pm) {
+      const price = parseFloat(pm[1].replace(/,/g, ""));
+      if (price > 1000) return { price, change: 0, source: "minkabu" };
+    }
+    return null;
   } catch { return null; }
 }
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  const { codes, names } = req.query;
+  const { codes, names, mufg } = req.query;
   if (!codes) return res.status(400).json({ error: "codes required" });
 
-  const codeList = codes.split(",").filter(Boolean).slice(0, 15);
+  const codeList = codes.split(",").filter(Boolean).slice(0, 10);
   const nameList = names ? decodeURIComponent(names).split("|") : [];
+  const mufgList = mufg ? mufg.split(",") : [];
   const results = {};
-  const resolvedCodes = {};
 
   await Promise.allSettled(
     codeList.map(async (code, i) => {
-      let priceData = await fetchFundPrice(code);
-      let usedCode = code;
+      let priceData = null;
 
-      // 失敗したら銘柄名から検索して再解決
+      // ① MUFG公式API（eMAXIS系はfund_cdがあれば最優先）
+      if (mufgList[i] && mufgList[i] !== "-") {
+        priceData = await fetchMufg(mufgList[i]);
+      }
+
+      // ② Yahoo JP（指定コード）
+      if (!priceData) priceData = await fetchYahoo(code);
+
+      // ③ Yahoo JP（名前検索でコード再解決）
       if (!priceData && nameList[i]) {
-        const resolved = await resolveFundCode(nameList[i]);
-        if (resolved && resolved !== code) {
-          priceData = await fetchFundPrice(resolved);
-          if (priceData) usedCode = resolved;
-        }
+        const resolved = await resolveYahooCode(nameList[i]);
+        if (resolved && resolved !== code) priceData = await fetchYahoo(resolved);
       }
 
-      if (priceData) {
-        results[code] = { ...priceData, source: "yahoo-jp" };
-        if (usedCode !== code) resolvedCodes[code] = usedCode;
+      // ④ minkabu（名前検索）
+      if (!priceData && nameList[i]) {
+        priceData = await fetchMinkabu(nameList[i]);
       }
+
+      if (priceData) results[code] = priceData;
     })
   );
 
-  res.setHeader("Cache-Control", "s-maxage=1800, stale-while-revalidate=300");
-  return res.status(200).json({ ...results, __resolved: resolvedCodes });
+  res.setHeader("Cache-Control", "s-maxage=900, stale-while-revalidate=300");
+  return res.status(200).json(results);
 }

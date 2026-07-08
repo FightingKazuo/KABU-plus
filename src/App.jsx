@@ -411,7 +411,12 @@ function KabuPlusInner() {
         const h = fundHoldings.find(x => getFundCode(x.stock) === code);
         return h?.stock?.name ?? "";
       });
-      fetch(`/api/fund-prices?codes=${fundCodes.join(",")}&names=${encodeURIComponent(fundNames.join("|"))}`)
+      // MUFG公式APIコード（eMAXIS系）も渡す
+      const mufgCds = fundCodes.map(code => {
+        const h = fundHoldings.find(x => getFundCode(x.stock) === code);
+        return h?.stock?.mufgCd ?? "-";
+      });
+      fetch(`/api/fund-prices?codes=${fundCodes.join(",")}&names=${encodeURIComponent(fundNames.join("|"))}&mufg=${mufgCds.join(",")}`)
         .then(r => r.ok ? r.json() : {})
         .then(data => {
           // 解決済みコードをキャッシュ（次回から直接使う）

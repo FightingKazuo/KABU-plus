@@ -392,21 +392,41 @@ function KabuPlusInner() {
         }).catch(() => {});
     }
 
-    // ② 投信（保有中のみ）
+    // ② 投信（保有中のみ・銘柄名フォールバック検索付き）
     const getFundCode = (s) => {
+      // 解決済みコードのキャッシュ確認
+      try {
+        const resolved = JSON.parse(localStorage.getItem("kabu_fund_codes") || "{}");
+        if (s?.fundCode && resolved[s.fundCode]) return resolved[s.fundCode];
+      } catch {}
       if (s?.fundCode) return s.fundCode;
       if (s?.type === "fund" && /^[0-9A-Z]{8}$/.test(s?.symbol ?? "")) return s.symbol;
       return null;
     };
-    const fundCodes = [...new Set(holdings.map(h => getFundCode(h.stock)).filter(Boolean))];
+    const fundHoldings = holdings.filter(h => getFundCode(h.stock));
+    const fundCodes = [...new Set(fundHoldings.map(h => getFundCode(h.stock)))];
     if (fundCodes.length > 0) {
-      fetch(`/api/fund-prices?codes=${fundCodes.join(",")}`)
+      // コード→銘柄名の対応（検索フォールバック用）
+      const fundNames = fundCodes.map(code => {
+        const h = fundHoldings.find(x => getFundCode(x.stock) === code);
+        return h?.stock?.name ?? "";
+      });
+      fetch(`/api/fund-prices?codes=${fundCodes.join(",")}&names=${encodeURIComponent(fundNames.join("|"))}`)
         .then(r => r.ok ? r.json() : {})
         .then(data => {
+          // 解決済みコードをキャッシュ（次回から直接使う）
+          if (data.__resolved && Object.keys(data.__resolved).length) {
+            try {
+              const cache = JSON.parse(localStorage.getItem("kabu_fund_codes") || "{}");
+              localStorage.setItem("kabu_fund_codes", JSON.stringify({ ...cache, ...data.__resolved }));
+            } catch {}
+          }
           const bySymbol = {};
-          holdings.forEach(h => {
+          fundHoldings.forEach(h => {
             const code = getFundCode(h.stock);
-            if (code && data[code]) bySymbol[h.stock.symbol] = data[code];
+            // 元コードでも解決後コードでも取れるように
+            const priceData = data[code] ?? data[h.stock?.fundCode];
+            if (priceData?.price) bySymbol[h.stock.symbol] = priceData;
           });
           setFundPrices(prev => ({ ...prev, ...bySymbol }));
         }).catch(() => {});

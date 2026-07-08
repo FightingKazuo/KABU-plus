@@ -45,7 +45,10 @@ const C = {
   amber:"#D97706", amberLight:"#FFFBEB",
 };
 
-// ── localStorage ────────────────────────────────────
+// ── localStorage + 世代バックアップ ─────────────────
+const BACKUP_KEYS = ["kabu_holdings", "kabu_goal"];
+const MAX_GEN = 3; // 保持世代数
+
 function loadLS(key, fallback) {
   try {
     const v = localStorage.getItem(key);
@@ -53,11 +56,9 @@ function loadLS(key, fallback) {
     const parsed = JSON.parse(v);
     if (key === "kabu_holdings") return parsed.map(h => {
       const stock = STOCKS.find(s => s.symbol === h.stock?.symbol) || h.stock;
-      // purchasePriceの異常値チェック（ドル生値混入バグの修正）
       let purchasePrice = h.purchasePrice ?? null;
       if (purchasePrice !== null && h.amount > 0) {
-        const impliedShares = h.amount / purchasePrice;
-        if (impliedShares > 100000) purchasePrice = null; // 異常値はリセット
+        if (h.amount / purchasePrice > 100000) purchasePrice = null;
       }
       return { ...h, stock, purchasePrice };
     });
@@ -65,10 +66,45 @@ function loadLS(key, fallback) {
     return parsed;
   } catch { return fallback; }
 }
+
 function saveLS(key, value) {
   try {
-    localStorage.setItem(key, JSON.stringify(key === "kabu_simStocks" ? value.map(s => s.symbol) : value));
+    const serialized = JSON.stringify(key === "kabu_simStocks" ? value.map(s => s.symbol) : value);
+    if (BACKUP_KEYS.includes(key)) {
+      const existing = localStorage.getItem(key);
+      if (existing && existing !== serialized) {
+        // 世代をシフト: bak2←bak1←bak0←current
+        for (let i = MAX_GEN - 1; i >= 1; i--) {
+          const prev = localStorage.getItem(`${key}_bak${i-1}`);
+          if (prev) localStorage.setItem(`${key}_bak${i}`, prev);
+        }
+        localStorage.setItem(`${key}_bak0`, existing);
+        localStorage.setItem("kabu_bak_time", new Date().toISOString());
+      }
+    }
+    localStorage.setItem(key, serialized);
   } catch {}
+}
+
+function restoreBackup() {
+  try {
+    const bak = localStorage.getItem("kabu_holdings_bak0");
+    if (!bak) return false;
+    // 世代を1つ戻す
+    localStorage.setItem("kabu_holdings", bak);
+    const bak1 = localStorage.getItem("kabu_holdings_bak1");
+    if (bak1) localStorage.setItem("kabu_holdings_bak0", bak1);
+    localStorage.removeItem("kabu_holdings_bak1");
+    return true;
+  } catch { return false; }
+}
+
+function getBackupTime() {
+  try {
+    const t = localStorage.getItem("kabu_bak_time");
+    if (!t) return null;
+    return new Date(t).toLocaleString("ja-JP", { month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" });
+  } catch { return null; }
 }
 
 // ── 計算ユーティリティ ───────────────────────────────
@@ -101,6 +137,25 @@ function simulateMonthly(stock, monthly, months) {
 function simulateLumpSum(stock, amount, yrs) {
   const r = stock.annualReturn/100;
   return Array.from({length:yrs+1},(_,y)=>({ year:`${y}年`, invested:amount, value:Math.round(amount*Math.pow(1+r,y)) }));
+}
+
+// 指定日時点の評価額を計算（補完用）
+function calcCurrentValueAt(h, dateStr, dayPrice) {
+  try {
+    const amt = Number(h.amount) || 0;
+    // 過去価格と購入時価格の両方があれば正確な比率計算
+    if (dayPrice && h.purchasePrice && h.purchasePrice > 0) {
+      return Math.round(amt * (dayPrice / h.purchasePrice));
+    }
+    // なければ年率近似
+    const bought = new Date(h.purchaseDate);
+    const target = new Date(dateStr);
+    if (isNaN(bought.getTime()) || isNaN(target.getTime())) return amt;
+    const years = Math.max(0, (target - bought) / (1000*60*60*24*365.25));
+    const ret = Number(h.stock?.annualReturn) || 0;
+    const result = amt * Math.pow(1 + ret/100, years);
+    return isNaN(result) ? amt : Math.round(result);
+  } catch { return Number(h.amount) || 0; }
 }
 
 const fmt    = n => n>=100000000 ? `${(n/100000000).toFixed(2)}億円` : `${Math.round(n).toLocaleString()}円`;
@@ -248,7 +303,12 @@ function KabuPlusInner() {
 
   // ── ポートフォリオ ──
   const [holdings, setHoldingsRaw] = useState(() => loadLS("kabu_holdings", SAMPLE_HOLDINGS));
-  const setHoldings = useCallback(v => setHoldingsRaw(prev => { const n=typeof v==="function"?v(prev):v; saveLS("kabu_holdings",n); return n; }),[]);
+  const setHoldings = useCallback(v => setHoldingsRaw(prev => {
+    const n = typeof v === "function" ? v(prev) : v;
+    saveLS("kabu_holdings", n);
+    setBackupTime(getBackupTime());
+    return n;
+  }),[]);
 
   const [showAdd, setShowAdd]         = useState(false);
   const [newStock, setNewStock]       = useState(STOCKS[0]);
@@ -264,6 +324,7 @@ function KabuPlusInner() {
 
   // ── API データ ──
   const [cryptoPrices, setCryptoPrices] = useState({});
+  const [fundPrices, setFundPrices]     = useState({});
   const [stockPrices, setStockPrices]   = useState({});
   const [usdJpy, setUsdJpy]             = useState(null);
   const [priceLoading, setPriceLoading] = useState(false);
@@ -275,6 +336,8 @@ function KabuPlusInner() {
 
   // ── 目標金額 ──
   const [goalAmount, setGoalAmountRaw] = useState(() => loadLS("kabu_goal", 0));
+  const [backupTime, setBackupTime]     = useState(() => getBackupTime());
+  const [restoreMsg, setRestoreMsg]     = useState("");
   const setGoalAmount = v => { setGoalAmountRaw(v); saveLS("kabu_goal", v); };
   const [showGoalEdit, setShowGoalEdit] = useState(false);
   const [goalInput, setGoalInput]       = useState("");
@@ -296,29 +359,67 @@ function KabuPlusInner() {
   const [showSimSearch, setShowSimSearch] = useState(false);
 
   // ── API取得 ──
-  useEffect(() => {
-    const ids = STOCKS.filter(s=>s.type==="crypto"&&s.cgId).map(s=>s.cgId).join(",");
-    fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=jpy&include_24hr_change=true`)
-      .then(r=>r.json()).then(data=>{
-        const prices={};
-        STOCKS.filter(s=>s.type==="crypto").forEach(s=>{
-          if(data[s.cgId]) prices[s.symbol]={price:data[s.cgId].jpy,change24h:data[s.cgId].jpy_24h_change||0};
-        });
-        setCryptoPrices(prices);
-      }).catch(()=>{});
-  },[]);
+  // ════ 価格取得（統合版・60秒ポーリング）════
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [priceFlash, setPriceFlash] = useState({}); // symbol → "up"|"down"
 
-  useEffect(() => {
-    const holdingSymbolsKey = [...new Set(holdings.map(h=>h.stock?.symbol).filter(Boolean))].sort().join(",");
-    // 為替レート取得（常時）
-    fetch("/api/forex").then(r=>r.json()).then(fx=>{
+  const refreshAllPrices = useCallback(() => {
+    // ① 仮想通貨（保有中のみ）
+    const heldCryptos = STOCKS.filter(s => s.type === "crypto" && s.cgId &&
+      holdings.some(h => h.stock?.symbol === s.symbol));
+    if (heldCryptos.length > 0) {
+      const ids = heldCryptos.map(s => s.cgId).join(",");
+      fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=jpy&include_24hr_change=true`)
+        .then(r => r.json()).then(data => {
+          const prices = {};
+          heldCryptos.forEach(s => {
+            if (data[s.cgId]) prices[s.symbol] = { price: data[s.cgId].jpy, change24h: data[s.cgId].jpy_24h_change || 0 };
+          });
+          setCryptoPrices(prev => {
+            // フラッシュ判定
+            const flash = {};
+            Object.keys(prices).forEach(sym => {
+              if (prev[sym]?.price && prices[sym].price !== prev[sym].price) {
+                flash[sym] = prices[sym].price > prev[sym].price ? "up" : "down";
+              }
+            });
+            if (Object.keys(flash).length) {
+              setPriceFlash(f => ({ ...f, ...flash }));
+              setTimeout(() => setPriceFlash({}), 1500);
+            }
+            return { ...prev, ...prices };
+          });
+        }).catch(() => {});
+    }
+
+    // ② 投信（保有中のみ）
+    const getFundCode = (s) => {
+      if (s?.fundCode) return s.fundCode;
+      if (s?.type === "fund" && /^[0-9A-Z]{8}$/.test(s?.symbol ?? "")) return s.symbol;
+      return null;
+    };
+    const fundCodes = [...new Set(holdings.map(h => getFundCode(h.stock)).filter(Boolean))];
+    if (fundCodes.length > 0) {
+      fetch(`/api/fund-prices?codes=${fundCodes.join(",")}`)
+        .then(r => r.ok ? r.json() : {})
+        .then(data => {
+          const bySymbol = {};
+          holdings.forEach(h => {
+            const code = getFundCode(h.stock);
+            if (code && data[code]) bySymbol[h.stock.symbol] = data[code];
+          });
+          setFundPrices(prev => ({ ...prev, ...bySymbol }));
+        }).catch(() => {});
+    }
+
+    // ③ 株式（保有中のみ・為替も）
+    fetch("/api/forex").then(r => r.json()).then(fx => {
       const rate = fx.usdJpy ?? 157.0;
       setUsdJpy(rate);
-      // 保有中の株式のみ取得（投信・仮想通貨は除外）
       const targets = [...new Set(holdings
         .filter(h => h.stock?.type === "jp" || h.stock?.type === "us")
         .map(h => h.stock?.symbol).filter(Boolean))];
-      if (targets.length === 0) { setPriceLoading(false); return; }
+      if (targets.length === 0) { setPriceLoading(false); setLastUpdate(new Date()); return; }
       setPriceLoading(true); setPriceError(false);
       const chunks = [];
       for (let i = 0; i < targets.length; i += 20) chunks.push(targets.slice(i, i + 20));
@@ -326,12 +427,122 @@ function KabuPlusInner() {
         fetch(`/api/stock-prices?symbols=${chunk.join(",")}&usdJpy=${rate}`)
           .then(r => r.ok ? r.json() : {}).catch(() => ({}))
       )).then(results => {
-        setStockPrices(prev => ({ ...prev, ...Object.assign({}, ...results) }));
+        const merged = Object.assign({}, ...results);
+        setStockPrices(prev => {
+          const flash = {};
+          Object.keys(merged).forEach(sym => {
+            if (prev[sym]?.price && merged[sym].price !== prev[sym].price) {
+              flash[sym] = merged[sym].price > prev[sym].price ? "up" : "down";
+            }
+          });
+          if (Object.keys(flash).length) {
+            setPriceFlash(f => ({ ...f, ...flash }));
+            setTimeout(() => setPriceFlash({}), 1500);
+          }
+          return { ...prev, ...merged };
+        });
+        setLastUpdate(new Date());
       }).catch(() => setPriceError(true))
         .finally(() => setPriceLoading(false));
     }).catch(() => setPriceLoading(false));
   // eslint-disable-next-line
-  },[holdings.map(h=>h.stock?.symbol).join(",")]);
+  }, [holdings.map(h => h.stock?.symbol).join(",")]);
+
+  // 初回＋銘柄変更時に取得
+  useEffect(() => { refreshAllPrices(); }, [refreshAllPrices]);
+
+  // 60秒ごとの自動更新（画面表示中のみ）
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") refreshAllPrices();
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [refreshAllPrices]);
+
+  // ════ ④ 日次スナップショット記録 ════
+  useEffect(() => {
+    if (holdings.length === 0) return;
+    // 評価額を計算して今日の日付で記録（1日1回上書き）
+    const timer = setTimeout(() => {
+      try {
+        const todayStr = new Date().toISOString().split("T")[0];
+        const history = JSON.parse(localStorage.getItem("kabu_history") || "[]");
+        let totalV = 0, totalI = 0;
+        holdings.forEach(h => {
+          const sp = stockPrices[h.stock?.symbol];
+          const cp = cryptoPrices[h.stock?.symbol];
+          const fp = fundPrices[h.stock?.symbol];
+          const livePrice = sp?.price ?? fp?.price ?? null;
+          totalV += calcCurrentValue(h.amount, h.purchaseDate, h.stock?.annualReturn ?? 10, livePrice, h.purchasePrice ?? null);
+          totalI += h.amount;
+        });
+        const existing = history.findIndex(r => r.date === todayStr);
+        const record = { date: todayStr, value: totalV, invested: totalI };
+        if (existing >= 0) history[existing] = record;
+        else history.push(record);
+        // 最大365日分保持
+        const trimmed = history.slice(-365);
+        localStorage.setItem("kabu_history", JSON.stringify(trimmed));
+      } catch {}
+    }, 3000); // 価格取得が終わってから記録
+    return () => clearTimeout(timer);
+  }, [holdings, stockPrices, cryptoPrices, fundPrices]);
+
+  // ════ 過去の未記録日を株価履歴APIで補完（起動時1回）════
+  useEffect(() => {
+    if (holdings.length === 0) return;
+    try {
+      const history = JSON.parse(localStorage.getItem("kabu_history") || "[]");
+      const todayStr = new Date().toISOString().split("T")[0];
+      // 直近7日間で欠けている日を確認
+      const missingDates = [];
+      for (let d = 1; d <= 30; d++) {
+        const date = new Date();
+        date.setDate(date.getDate() - d);
+        const ds = date.toISOString().split("T")[0];
+        // 最も古い保有日より前はスキップ
+        const earliest = holdings.reduce((min, h) => h.purchaseDate < min ? h.purchaseDate : min, todayStr);
+        if (ds < earliest) break;
+        if (!history.some(r => r.date === ds)) missingDates.push(ds);
+      }
+      if (missingDates.length === 0) return;
+
+      // 株・米国株の保有銘柄の過去価格を取得
+      const targets = [...new Set(holdings
+        .filter(h => h.stock?.type === "jp" || h.stock?.type === "us")
+        .map(h => h.stock?.symbol).filter(Boolean))];
+
+      const backfill = (priceHistory) => {
+        try {
+          const hist = JSON.parse(localStorage.getItem("kabu_history") || "[]");
+          missingDates.forEach(ds => {
+            let totalV = 0, totalI = 0;
+            holdings.forEach(h => {
+              if (h.purchaseDate > ds) return; // その日まだ買ってない
+              totalI += h.amount;
+              const symHist = priceHistory[h.stock?.symbol];
+              const dayPrice = symHist?.find(p => p.date === ds)?.price ?? null;
+              // 過去価格があれば purchasePrice との比率、なければ年率近似
+              totalV += calcCurrentValueAt(h, ds, dayPrice);
+            });
+            if (totalI > 0) hist.push({ date: ds, value: totalV, invested: totalI, backfilled: true });
+          });
+          hist.sort((a, b) => a.date.localeCompare(b.date));
+          localStorage.setItem("kabu_history", JSON.stringify(hist.slice(-365)));
+        } catch {}
+      };
+
+      if (targets.length > 0) {
+        fetch(`/api/stock-history?symbols=${targets.join(",")}&usdJpy=${usdJpy ?? 157}`)
+          .then(r => r.ok ? r.json() : {})
+          .then(backfill)
+          .catch(() => backfill({}));
+      } else {
+        backfill({});
+      }
+    } catch {}
+  // eslint-disable-next-line
+  }, [holdings.length]); // 保有数が変わったときのみ
 
   useEffect(() => {
     if(!searchMode||stockSearch.length<1){setSearchResults([]);return;}
@@ -362,18 +573,21 @@ function KabuPlusInner() {
         try {
           const sp = stockPrices[h.stock.symbol];
           const cp = cryptoPrices[h.stock.symbol];
-          const currentValue = calcCurrentValue(h.amount, h.purchaseDate, h.stock.annualReturn ?? 10, sp?.price ?? null, h.purchasePrice ?? null);
+          const fp = fundPrices[h.stock.symbol];
+          // 優先度: 株価API > 投信基準価額 > 年率近似
+          const livePrice = sp?.price ?? fp?.price ?? null;
+          const currentValue = calcCurrentValue(h.amount, h.purchaseDate, h.stock.annualReturn ?? 10, livePrice, h.purchasePrice ?? null);
           const gain    = currentValue - h.amount;
           const gainPct = h.amount > 0 ? (currentValue / h.amount - 1) * 100 : 0;
           const days    = Math.max(0, Math.floor((new Date() - new Date(h.purchaseDate)) / (1000*60*60*24)));
-          const isLive  = !!(sp || cp);
-          return { ...h, currentValue, gain, gainPct, days, isLive, currentPrice: sp?.price ?? null, cp: cp ?? null, spChange: sp?.change ?? null };
+          const isLive  = !!(sp || cp || fp);
+          return { ...h, currentValue, gain, gainPct, days, isLive, currentPrice: sp?.price ?? null, cp: cp ?? null, fp: fp ?? null, spChange: sp?.change ?? null };
         } catch(e) {
           // 計算エラーは安全なデフォルト値で返す
           return { ...h, currentValue: h.amount, gain: 0, gainPct: 0, days: 0, isLive: false, currentPrice: null, cp: null, spChange: null };
         }
       })
-  ,[holdings, cryptoPrices, stockPrices]);
+  ,[holdings, cryptoPrices, stockPrices, fundPrices]);
 
   // ── 銘柄ごと集計 ──
   const groupedStats = useMemo(()=>{
@@ -408,6 +622,28 @@ function KabuPlusInner() {
   const totalValue    = portfolioStats.reduce((s,h)=>s+h.currentValue,0);
   const totalGain     = totalValue-totalInvested;
   const totalGainPct  = totalInvested>0?(totalValue/totalInvested-1)*100:0;
+
+  // ③ 本日の増減（前日スナップショットとの差分）
+  const todayChange = useMemo(() => {
+    try {
+      const history = JSON.parse(localStorage.getItem("kabu_history") || "[]");
+      if (history.length < 1) return null;
+      const todayStr = new Date().toISOString().split("T")[0];
+      // 今日以外の最新レコード（＝前日以前）
+      const prev = [...history].reverse().find(r => r.date !== todayStr);
+      if (!prev) return null;
+      const diff = totalValue - prev.value;
+      const pct = prev.value > 0 ? (diff / prev.value) * 100 : 0;
+      return { diff, pct, since: prev.date };
+    } catch { return null; }
+  }, [totalValue]);
+
+  // ④ 資産推移の実績履歴
+  const realHistory = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("kabu_history") || "[]");
+    } catch { return []; }
+  }, [totalValue]);
   const goalProgress  = goalAmount>0 ? Math.min(100,(totalValue/goalAmount)*100) : 0;
 
   // ── 資産推移グラフ ──
@@ -552,9 +788,23 @@ function KabuPlusInner() {
           <div style={{background:"linear-gradient(135deg,#1D4ED8 0%,#0EA5E9 100%)",borderRadius:16,padding:"20px 20px 18px",marginBottom:14,boxShadow:"0 4px 20px #2563EB30"}}>
             <div style={{fontSize:12,color:"#BFDBFE",marginBottom:4,fontWeight:600}}>合計評価額</div>
             <div style={{fontSize:32,fontWeight:900,color:"#fff",letterSpacing:"-0.02em",marginBottom:8}}>{fmt(totalValue)}</div>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
               <span style={{background:"rgba(255,255,255,0.18)",borderRadius:5,color:"#fff",fontSize:11,fontWeight:700,padding:"2px 8px"}}>運用収益額</span>
               <span style={{fontSize:18,fontWeight:800,color:totalGain>=0?"#86EFAC":"#FCA5A5"}}>{totalGain>=0?"+":""}{fmt(totalGain)} ({fmtPct(totalGainPct)})</span>
+            </div>
+            {/* ③ 本日の増減 */}
+            {todayChange&&(
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                <span style={{background:"rgba(255,255,255,0.12)",borderRadius:5,color:"#BFDBFE",fontSize:10,fontWeight:600,padding:"2px 8px"}}>本日</span>
+                <span style={{fontSize:14,fontWeight:700,color:todayChange.diff>=0?"#86EFAC":"#FCA5A5"}}>
+                  {todayChange.diff>=0?"▲":"▼"} {todayChange.diff>=0?"+":""}{fmt(todayChange.diff)} ({fmtPct(todayChange.pct)})
+                </span>
+              </div>
+            )}
+            {/* 最終更新時刻＋手動更新 */}
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              {lastUpdate&&<span style={{fontSize:10,color:"#93C5FD"}}>🔄 {lastUpdate.toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"})}更新 · 60秒毎に自動更新</span>}
+              <button onClick={refreshAllPrices} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:5,color:"#fff",fontSize:10,fontWeight:600,padding:"2px 8px",cursor:"pointer"}}>今すぐ更新</button>
             </div>
 
             {/* 目標プログレスバー */}
@@ -578,6 +828,29 @@ function KabuPlusInner() {
                 {goalAmount>0?"目標変更":"🎯 目標設定"}
               </button>
             </div>
+            {/* バックアップ情報 */}
+            {backupTime&&(
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.15)"}}>
+                <span style={{fontSize:10,color:"#BFDBFE"}}>💾 最終バックアップ: {backupTime}</span>
+                <button onClick={()=>{
+                  if(window.confirm("1つ前のデータに戻しますか？")) {
+                    const ok = restoreBackup();
+                    if(ok) {
+                      setHoldingsRaw(loadLS("kabu_holdings", []));
+                      setBackupTime(getBackupTime());
+                      setRestoreMsg("✅ 復元しました");
+                      setTimeout(()=>setRestoreMsg(""), 3000);
+                    } else {
+                      setRestoreMsg("⚠️ バックアップがありません");
+                      setTimeout(()=>setRestoreMsg(""), 3000);
+                    }
+                  }
+                }} style={{background:"rgba(255,255,255,0.18)",border:"1px solid rgba(255,255,255,0.3)",borderRadius:6,color:"#fff",fontSize:10,fontWeight:700,padding:"3px 8px",cursor:"pointer"}}>
+                  ↩️ 元に戻す
+                </button>
+              </div>
+            )}
+            {restoreMsg&&<div style={{fontSize:11,color:"#FDE68A",marginTop:6,textAlign:"center"}}>{restoreMsg}</div>}
           </div>
 
           {/* 目標入力モーダル */}
@@ -601,8 +874,29 @@ function KabuPlusInner() {
             </div>
           )}
 
-          {/* 推移グラフ */}
-          {portfolioChart.length>1&&(
+          {/* ④ 実績推移グラフ（日次スナップショット） */}
+          {realHistory.length>1&&(
+            <div style={{...card,padding:"14px 6px 10px"}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.mid,marginLeft:10,marginBottom:10}}>📈 実績推移（毎日自動記録）</div>
+              <ResponsiveContainer width="100%" height={160}>
+                <AreaChart data={realHistory.map(r=>({...r,label:r.date.slice(5).replace("-","/")}))}>
+                  <defs>
+                    <linearGradient id="rg" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={C.green} stopOpacity={0.15}/><stop offset="95%" stopColor={C.green} stopOpacity={0.02}/></linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.soft}/>
+                  <XAxis dataKey="label" tick={{fontSize:10,fill:C.light}}/>
+                  <YAxis tick={{fontSize:10,fill:C.light}} tickFormatter={v=>`${(v/10000).toFixed(0)}万`} domain={["dataMin","dataMax"]}/>
+                  <Tooltip formatter={(v,n)=>[fmt(v),n==="value"?"評価額":"元本"]} contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}}/>
+                  <Area type="monotone" dataKey="invested" stroke={C.light} strokeDasharray="4 3" strokeWidth={1.5} fill="none" name="元本"/>
+                  <Area type="monotone" dataKey="value" stroke={C.green} strokeWidth={2.5} fill="url(#rg)" name="評価額"/>
+                </AreaChart>
+              </ResponsiveContainer>
+              <p style={{fontSize:9,color:C.light,margin:"4px 10px 0"}}>アプリを開いた日の評価額を自動記録しています</p>
+            </div>
+          )}
+
+          {/* 推移グラフ（理論値） */}
+          {portfolioChart.length>1&&realHistory.length<=1&&(
             <div style={{...card,padding:"14px 6px 10px"}}>
               <div style={{fontSize:12,fontWeight:700,color:C.mid,marginLeft:10,marginBottom:10}}>資産推移</div>
               <ResponsiveContainer width="100%" height={170}>
@@ -698,8 +992,9 @@ function KabuPlusInner() {
             {/* 通常モード */}
             {!groupMode&&sortedStats.map((h,i)=>{
               const boughtStr=new Date(h.purchaseDate).toLocaleDateString("ja-JP",{year:"numeric",month:"short",day:"numeric"});
+              const flash = priceFlash[h.stock?.symbol];
               return (
-                <div key={h.id} style={{borderTop:i>0?`1px solid ${C.soft}`:"none",paddingTop:i>0?14:0,paddingBottom:14}}>
+                <div key={h.id} style={{borderTop:i>0?`1px solid ${C.soft}`:"none",paddingTop:i>0?14:0,paddingBottom:14,background:flash==="up"?"#ECFDF580":flash==="down"?"#FEF2F280":"transparent",transition:"background 1s ease-out",borderRadius:flash?8:0}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <div style={{width:10,height:10,borderRadius:"50%",background:TYPE_COLOR[h.stock?.type],flexShrink:0}}/>
@@ -711,7 +1006,8 @@ function KabuPlusInner() {
                         <div style={{fontSize:11,color:C.light}}>{h.stock?.sector} · 年率{fmtPct(h.stock?.annualReturn??0)}</div>
                         {h.cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>¥{h.cp?.price?.toLocaleString()} ({h.cp?.change24h>=0?"+":""}{h.cp?.change24h?.toFixed(1)}% 24h) <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {h.currentPrice&&typeof h.currentPrice==="number"&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>¥{h.currentPrice.toLocaleString()} {h.spChange!=null&&typeof h.spChange==="number"&&`(${h.spChange>=0?"+":""}${h.spChange.toFixed(1)}%)`} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
-                        {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>年率近似で計算中</div>}
+                        {h.fp?.price&&typeof h.fp.price==="number"&&<div style={{fontSize:11,color:"#7C3AED",marginTop:1}}>基準価額: ¥{h.fp.price.toLocaleString()} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
+                        {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>年率近似で計算中（基準価額取得待ち）</div>}
                       </div>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>

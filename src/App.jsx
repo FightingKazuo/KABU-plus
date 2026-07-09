@@ -499,10 +499,10 @@ function KabuPlusInner() {
           const bySymbol = {};
           fundHoldings.forEach(h => {
             const code = getFundCode(h.stock);
-            // 元コードでも解決後コードでも取れるように
             const priceData = data[code] ?? data[h.stock?.fundCode];
             if (priceData?.price) bySymbol[h.stock.symbol] = priceData;
           });
+          if (data.__debug) console.log("[fund-prices debug]", data.__debug);
           setFundPrices(prev => ({ ...prev, ...bySymbol }));
           // ★purchasePrice未設定の保有記録を遡って補正
           // 購入日が今日なら現在の基準価額＝購入時価額として保存（皮算用を正確に）

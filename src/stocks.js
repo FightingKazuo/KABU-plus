@@ -15,7 +15,7 @@ export const STOCKS = [
   { symbol:"GLOBAL-REIT", mufgCd:"252662", fundCode:"03312179",    name:"eMAXIS Slim 先進国リート",           sector:"投信", type:"fund", annualReturn:8.1,  dividend:3.5, minAmount:100, unitShares:null, 優待:null, risk:"medium", desc:"世界の不動産に分散投資。為替リスクあり。",                tags:["不動産","グローバル","高配当"] },
   { symbol:"eMAXIS-EM", mufgCd:"252870", fundCode:"03312187",      name:"eMAXIS Slim 新興国株式",             sector:"投信", type:"fund", annualReturn:10.2, dividend:0,   minAmount:100, unitShares:null, 優待:null, risk:"high",   desc:"中国・インド等の新興国に投資。高成長期待。",              tags:["新興国","成長株","ハイリスク"] },
   { symbol:"SBI-GOLD", fundCode:"89312199",       name:"SBI・iシェアーズ・ゴールド",        sector:"投信", type:"fund", annualReturn:8.5,  dividend:0,   minAmount:100, unitShares:null, 優待:null, risk:"medium", desc:"金(ゴールド)に投資。インフレや不況時の守りに。",         tags:["金","インフレ対策","守りの投資"] },
-  { symbol:"iFree-LEVER", fundCode:"04319188",    name:"iFreeレバレッジ NASDAQ100",          sector:"投信", type:"fund", annualReturn:45.0, dividend:0,   minAmount:100, unitShares:null, 優待:null, risk:"very-high", desc:"NASDAQ100の2倍値動き。超ハイリスク・超ハイリターン。", tags:["レバレッジ","超ハイリスク","上級者向け"] },
+  { symbol:"iFree-LEVER", fundCode:"0431218A",    name:"iFreeレバレッジ NASDAQ100",          sector:"投信", type:"fund", annualReturn:45.0, dividend:0,   minAmount:100, unitShares:null, 優待:null, risk:"very-high", desc:"NASDAQ100の2倍値動き。超ハイリスク・超ハイリターン。", tags:["レバレッジ","超ハイリスク","上級者向け"] },
 
   // ════ 国内個別株 ════
   { symbol:"7203.T", name:"トヨタ自動車",           sector:"自動車",    type:"jp", annualReturn:12.4, dividend:2.8, minAmount:358000,  unitShares:100, 優待:"自社製品割引",  risk:"medium", desc:"世界最大級の自動車メーカー。EV転換中の日本の顔。",        tags:["日本代表","配当あり","優待あり"] },

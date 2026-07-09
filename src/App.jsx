@@ -158,6 +158,52 @@ function calcCurrentValueAt(h, dateStr, dayPrice) {
   } catch { return Number(h.amount) || 0; }
 }
 
+// ═══ 売却コスト計算（SBI証券準拠・2026年時点の想定）═══
+function calcSellCost(holding, currentValue, usdJpyRate) {
+  const type = holding.stock?.type;
+  const account = holding.account ?? "nisa";
+  const gain = currentValue - holding.amount;
+  let fee = 0;        // 売却手数料
+  let spread = 0;     // 為替・売買スプレッド
+  let tax = 0;        // 税金
+  const details = [];
+
+  if (type === "us") {
+    // 米国株: 0.495%（上限22ドル）+ 為替スプレッド25銭/ドル
+    const rate = usdJpyRate || 157;
+    fee = Math.min(currentValue * 0.00495, 22 * rate);
+    fee = Math.round(fee);
+    spread = Math.round((currentValue / rate) * 0.25);
+    if (fee > 0) details.push({ label: "売却手数料 (0.495%)", amount: -fee });
+    if (spread > 0) details.push({ label: "為替スプレッド (25銭/$)", amount: -spread });
+  } else if (type === "jp") {
+    // 国内株: SBIゼロ革命で0円
+    details.push({ label: "売却手数料", amount: 0, note: "SBIゼロ革命で無料" });
+  } else if (type === "fund") {
+    // 投信: 基本無料（信託財産留保は銘柄により0〜0.3%・ここでは0）
+    details.push({ label: "売却手数料", amount: 0, note: "ノーロード" });
+  } else if (type === "crypto") {
+    // 仮想通貨: スプレッド0.5%と仮定（取引所形式）
+    spread = Math.round(currentValue * 0.005);
+    details.push({ label: "売買スプレッド (約0.5%)", amount: -spread });
+  }
+
+  // 税金: 特定口座で利益が出ている場合のみ20.315%
+  if (account === "tokutei" && gain > 0) {
+    tax = Math.round(gain * 0.20315);
+    details.push({ label: "税金 (20.315%)", amount: -tax });
+  } else if (account === "nisa") {
+    details.push({ label: "税金", amount: 0, note: "NISA口座なので非課税" });
+  } else if (gain <= 0) {
+    details.push({ label: "税金", amount: 0, note: "損失のため課税なし" });
+  }
+
+  const totalCost = fee + spread + tax;
+  const netProceeds = currentValue - totalCost;
+  const netGain = netProceeds - holding.amount;
+  return { fee, spread, tax, totalCost, netProceeds, netGain, details };
+}
+
 const fmt    = n => n>=100000000 ? `${(n/100000000).toFixed(2)}億円` : `${Math.round(n).toLocaleString()}円`;
 const fmtPct = n => (n>=0?"+":"")+n.toFixed(1)+"%";
 const today  = () => new Date().toISOString().split("T")[0];
@@ -314,6 +360,14 @@ function KabuPlusInner() {
   const [newStock, setNewStock]       = useState(STOCKS[0]);
   const [newDate, setNewDate]         = useState(today());
   const [newAmount, setNewAmount]     = useState(100000);
+  const [newAccount, setNewAccount]   = useState("nisa"); // nisa | tokutei
+  const [sellTarget, setSellTarget]   = useState(null);   // 売却確認モーダル対象
+  const [soldHistory, setSoldHistoryRaw] = useState(() => loadLS("kabu_sold", []));
+  const setSoldHistory = (v) => {
+    const next = typeof v === "function" ? v(soldHistory) : v;
+    setSoldHistoryRaw(next);
+    saveLS("kabu_sold", next);
+  };
   const [newAnnualReturn, setNewAnnualReturn] = useState(null); // カスタム年率
   const [stockSearch, setStockSearch] = useState("");
   const [showPicker, setShowPicker]   = useState(false);
@@ -389,6 +443,22 @@ function KabuPlusInner() {
             }
             return { ...prev, ...prices };
           });
+          // ★purchasePrice未設定の仮想通貨を補正
+          setHoldings(prevH => {
+            let changed = false;
+            const next = prevH.map(h => {
+              if (h.purchasePrice) return h;
+              const priceData = prices[h.stock?.symbol];
+              if (!priceData?.price) return h;
+              const daysSince = Math.floor((new Date() - new Date(h.purchaseDate)) / (1000*60*60*24));
+              if (daysSince <= 3) {
+                changed = true;
+                return { ...h, purchasePrice: priceData.price, priceSource: "backfilled" };
+              }
+              return h;
+            });
+            return changed ? next : prevH;
+          });
         }).catch(() => {});
     }
 
@@ -434,6 +504,26 @@ function KabuPlusInner() {
             if (priceData?.price) bySymbol[h.stock.symbol] = priceData;
           });
           setFundPrices(prev => ({ ...prev, ...bySymbol }));
+          // ★purchasePrice未設定の保有記録を遡って補正
+          // 購入日が今日なら現在の基準価額＝購入時価額として保存（皮算用を正確に）
+          const todayStr = new Date().toISOString().split("T")[0];
+          setHoldings(prevH => {
+            let changed = false;
+            const next = prevH.map(h => {
+              if (h.purchasePrice) return h; // 既に設定済み
+              const priceData = bySymbol[h.stock?.symbol];
+              if (!priceData?.price) return h;
+              // 購入日が3日以内なら現在価格を購入時価格として採用
+              // （投信の基準価額は1日1回更新なのでほぼ同じ値）
+              const daysSince = Math.floor((new Date() - new Date(h.purchaseDate)) / (1000*60*60*24));
+              if (daysSince <= 3) {
+                changed = true;
+                return { ...h, purchasePrice: priceData.price, priceSource: "backfilled" };
+              }
+              return h;
+            });
+            return changed ? next : prevH;
+          });
         }).catch(() => {});
     }
 
@@ -465,6 +555,22 @@ function KabuPlusInner() {
             setTimeout(() => setPriceFlash({}), 1500);
           }
           return { ...prev, ...merged };
+        });
+        // ★purchasePrice未設定の株を補正（購入3日以内なら現価格を採用）
+        setHoldings(prevH => {
+          let changed = false;
+          const next = prevH.map(h => {
+            if (h.purchasePrice) return h;
+            const priceData = merged[h.stock?.symbol];
+            if (!priceData?.price) return h;
+            const daysSince = Math.floor((new Date() - new Date(h.purchaseDate)) / (1000*60*60*24));
+            if (daysSince <= 3) {
+              changed = true;
+              return { ...h, purchasePrice: priceData.price, priceSource: "backfilled" };
+            }
+            return h;
+          });
+          return changed ? next : prevH;
         });
         setLastUpdate(new Date());
       }).catch(() => setPriceError(true))
@@ -768,8 +874,9 @@ function KabuPlusInner() {
       stock: stockToSave,
       purchaseDate: newDate,
       amount: newAmount,
-      purchasePrice,           // 円建て購入時価格（取得できた場合）
-      priceSource: purchasePrice ? "live" : "approx", // 損益計算の根拠を記録
+      purchasePrice,
+      priceSource: purchasePrice ? "live" : "approx",
+      account: newAccount,     // nisa | tokutei
     }]);
     setAddingHolding(false);
     setShowAdd(false); setStockSearch(""); setSearchResults([]); setSearchMode(false); setNewAnnualReturn(null);
@@ -1063,7 +1170,7 @@ function KabuPlusInner() {
                       <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
                         <span style={{fontSize:12,color:C.light}}>購入: {fmt(h.amount)}</span>
                         <span style={{fontSize:12,color:C.text,fontWeight:600}}>現在: {fmt(h.currentValue)}</span>
-                        <button onClick={()=>setHoldings(p=>p.filter(x=>x.id!==h.id))} style={{background:"none",border:"none",color:C.light,fontSize:11,cursor:"pointer"}}>削除</button>
+                        <button onClick={()=>setSellTarget(h)} style={{background:"none",border:"none",color:C.blue,fontSize:11,fontWeight:700,cursor:"pointer"}}>📤 売却</button>
                       </div>
                     </div>
                   ))}
@@ -1090,6 +1197,17 @@ function KabuPlusInner() {
                         {h.currentPrice&&typeof h.currentPrice==="number"&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>¥{h.currentPrice.toLocaleString()} {h.spChange!=null&&typeof h.spChange==="number"&&`(${h.spChange>=0?"+":""}${h.spChange.toFixed(1)}%)`} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {h.fp?.price&&typeof h.fp.price==="number"&&<div style={{fontSize:11,color:"#7C3AED",marginTop:1}}>基準価額: ¥{h.fp.price.toLocaleString()} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>年率近似で計算中（{h.stock?.type==="fund"?"基準価額":"株価"}取得待ち・30秒毎に再試行）</div>}
+                        {h.isLive&&!h.purchasePrice&&(
+                          <button onClick={()=>{
+                            const livePrice = h.currentPrice ?? h.cp?.price ?? h.fp?.price;
+                            if(!livePrice) return;
+                            if(window.confirm("今の価格を購入時価格として設定します。\n以降、実際の値動きで損益が計算されます。")){
+                              setHoldings(p=>p.map(x=>x.id===h.id?{...x,purchasePrice:livePrice,purchaseDate:new Date().toISOString().split("T")[0],priceSource:"rebased"}:x));
+                            }
+                          }} style={{background:C.amberLight,border:"1px solid #FDE68A",borderRadius:6,color:C.amber,fontSize:10,fontWeight:700,padding:"3px 8px",cursor:"pointer",marginTop:3}}>
+                            📍 今の価格を基準にして実測開始
+                          </button>
+                        )}
                         {h.purchasePrice&&h.isLive&&<div style={{fontSize:9,color:C.green,marginTop:1}}>✓ 実際の価格比率で計算中（購入時: ¥{Number(h.purchasePrice).toLocaleString()}）</div>}
                       </div>
                     </div>
@@ -1097,8 +1215,11 @@ function KabuPlusInner() {
                       <div style={{background:h.gain>=0?C.greenLight:C.redLight,border:`1px solid ${h.gain>=0?C.greenMid:C.redMid}`,borderRadius:8,padding:"4px 12px"}}>
                         <div style={{fontSize:16,fontWeight:800,color:h.gain>=0?C.green:C.red}}>{fmtPct(h.gainPct)}</div>
                       </div>
-                      <button onClick={()=>setHoldings(p=>p.filter(x=>x.id!==h.id))} style={{background:"none",border:"none",color:C.light,fontSize:11,cursor:"pointer",padding:0}}>削除</button>
+                      <button onClick={()=>setSellTarget(h)} style={{background:C.blueLight,border:`1px solid ${C.blueMid}`,borderRadius:6,color:C.blue,fontSize:11,fontWeight:700,cursor:"pointer",padding:"3px 10px"}}>📤 売却</button>
                     </div>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"flex-end",marginTop:-4,marginBottom:6}}>
+                    <button onClick={()=>{if(window.confirm("この記録を削除します（売却履歴には残りません）。よろしいですか？"))setHoldings(p=>p.filter(x=>x.id!==h.id));}} style={{background:"none",border:"none",color:C.light,fontSize:10,cursor:"pointer",padding:0}}>記録を削除</button>
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:8}}>
                     {[["購入額",fmt(h.amount),C.mid],["現在価値",fmt(h.currentValue),C.text],["損益",(h.gain>=0?"+":"")+fmt(h.gain),h.gain>=0?C.green:C.red]].map(([l,v,c])=>(
@@ -1116,6 +1237,105 @@ function KabuPlusInner() {
               );
             })}
           </div>
+
+          {/* 売却履歴 */}
+          {soldHistory.length>0&&(
+            <div style={{...card}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.mid,marginBottom:10}}>📜 売却履歴（確定損益）</div>
+              <div style={{background:C.bg,borderRadius:10,padding:"10px 14px",marginBottom:12,display:"flex",justifyContent:"space-between"}}>
+                <span style={{fontSize:12,color:C.mid}}>確定損益 合計</span>
+                {(() => {
+                  const totalNetGain = soldHistory.reduce((s,r)=>s+r.netGain,0);
+                  return <span style={{fontWeight:800,color:totalNetGain>=0?C.green:C.red}}>{totalNetGain>=0?"+":""}{fmt(totalNetGain)}</span>;
+                })()}
+              </div>
+              {[...soldHistory].reverse().map((r,i)=>(
+                <div key={r.id} style={{borderTop:i>0?`1px solid ${C.soft}`:"none",paddingTop:i>0?10:0,paddingBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:13,fontWeight:600}}>{r.stockName}</span>
+                    <span style={{fontSize:13,fontWeight:800,color:r.netGain>=0?C.green:C.red}}>{r.netGain>=0?"+":""}{fmt(r.netGain)}</span>
+                  </div>
+                  <div style={{fontSize:11,color:C.light}}>{r.soldDate}売却 · {r.account==="nisa"?"NISA":"特定口座"} · 手取り{fmt(r.netProceeds)}{r.totalCost>0&&` · コスト${fmt(r.totalCost)}`}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 売却確認モーダル */}
+          {sellTarget&&(()=>{
+            const cost = calcSellCost(sellTarget, sellTarget.currentValue, usdJpy);
+            return (
+              <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.5)",zIndex:50,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={()=>setSellTarget(null)}>
+                <div onClick={e=>e.stopPropagation()} style={{background:C.card,borderRadius:"20px 20px 0 0",padding:"20px 18px 28px",width:"100%",maxWidth:480,maxHeight:"85vh",overflowY:"auto"}}>
+                  <div style={{width:36,height:4,background:C.border,borderRadius:2,margin:"0 auto 16px"}}/>
+                  <div style={{fontSize:15,fontWeight:800,marginBottom:4}}>📤 {sellTarget.stock?.name} を売却</div>
+                  <div style={{fontSize:11,color:C.light,marginBottom:16}}>{sellTarget.account==="nisa"?"NISA口座":"特定口座"} · {sellTarget.stock?.sector}</div>
+
+                  <div style={{background:C.bg,borderRadius:10,padding:"12px 14px",marginBottom:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
+                      <span style={{color:C.mid}}>現在価値</span>
+                      <span style={{fontWeight:700}}>{fmt(sellTarget.currentValue)}</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.light}}>
+                      <span>購入額</span>
+                      <span>{fmt(sellTarget.amount)}</span>
+                    </div>
+                  </div>
+
+                  {/* コスト内訳 */}
+                  <div style={{marginBottom:10}}>
+                    {cost.details.map((d,i)=>(
+                      <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"5px 2px",borderBottom:i<cost.details.length-1?`1px solid ${C.soft}`:"none"}}>
+                        <span style={{color:C.mid}}>{d.label}{d.note&&<span style={{color:C.light,fontSize:10}}> ({d.note})</span>}</span>
+                        <span style={{color:d.amount<0?C.red:C.light,fontWeight:d.amount<0?700:400}}>{d.amount===0?"¥0":`-${fmt(-d.amount)}`}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {cost.totalCost>0&&(
+                    <div style={{background:C.amberLight,border:"1px solid #FDE68A",borderRadius:8,padding:"8px 12px",marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
+                      <span>⚠️</span>
+                      <span style={{fontSize:12,color:"#92400E",fontWeight:600}}>出口コストで{fmt(cost.totalCost)}かかります</span>
+                    </div>
+                  )}
+
+                  <div style={{background:cost.netGain>=0?C.greenLight:C.redLight,border:`1px solid ${cost.netGain>=0?C.greenMid:C.redMid}`,borderRadius:10,padding:"12px 14px",marginBottom:16}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
+                      <span style={{color:C.mid}}>手取り額</span>
+                      <span style={{fontWeight:800,fontSize:16}}>{fmt(cost.netProceeds)}</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
+                      <span style={{color:C.mid}}>実質損益</span>
+                      <span style={{fontWeight:800,color:cost.netGain>=0?C.green:C.red}}>{cost.netGain>=0?"+":""}{fmt(cost.netGain)}</span>
+                    </div>
+                  </div>
+
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>setSellTarget(null)} style={{flex:1,background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,color:C.mid,fontSize:13,fontWeight:600,padding:"12px 0",cursor:"pointer"}}>キャンセル</button>
+                    <button onClick={()=>{
+                      setSoldHistory(p=>[...p,{
+                        id: Date.now(),
+                        stockName: sellTarget.stock?.name,
+                        stockType: sellTarget.stock?.type,
+                        amount: sellTarget.amount,
+                        currentValue: sellTarget.currentValue,
+                        netProceeds: cost.netProceeds,
+                        netGain: cost.netGain,
+                        totalCost: cost.totalCost,
+                        account: sellTarget.account,
+                        purchaseDate: sellTarget.purchaseDate,
+                        soldDate: new Date().toISOString().split("T")[0],
+                      }]);
+                      setHoldings(p=>p.filter(x=>x.id!==sellTarget.id));
+                      setSellTarget(null);
+                    }} style={{flex:2,background:C.blue,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,padding:"12px 0",cursor:"pointer"}}>
+                      売却を確定する
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* 追加フォーム */}
           {showAdd&&(
@@ -1221,6 +1441,17 @@ function KabuPlusInner() {
                   <span style={{color:C.mid,fontSize:13}}>% / 年</span>
                   {newAnnualReturn!==null&&<button onClick={()=>setNewAnnualReturn(null)} style={{background:"none",border:"none",color:C.light,fontSize:11,cursor:"pointer"}}>リセット</button>}
                 </div>
+              </div>
+
+              {/* 口座タイプ */}
+              <div style={{marginBottom:12}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.mid,display:"block",marginBottom:6}}>口座タイプ</label>
+                <div style={{display:"flex",background:C.soft,borderRadius:9,padding:3}}>
+                  {[["nisa","NISA（非課税）"],["tokutei","特定口座（課税20.315%）"]].map(([k,l])=>(
+                    <button key={k} onClick={()=>setNewAccount(k)} style={{flex:1,padding:"8px 0",background:newAccount===k?C.blue:"transparent",border:"none",borderRadius:7,color:newAccount===k?"#fff":C.mid,fontSize:11,fontWeight:600,cursor:"pointer"}}>{l}</button>
+                  ))}
+                </div>
+                <div style={{fontSize:10,color:C.light,marginTop:4}}>{newAccount==="nisa"?"売却時に税金がかかりません":"売却益に20.315%の税金がかかります"}</div>
               </div>
 
               {/* 購入日 */}

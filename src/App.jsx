@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { STOCKS } from "./stocks";
 
 // ── Error Boundary（クラッシュ時に白画面を防ぐ）──────────
@@ -926,8 +926,78 @@ function KabuPlusInner() {
     setTimeout(() => setShowAdd(true), 50);
   };
 
+  // ── Pull-to-Refresh（引っ張って更新） ──
+  const [pullY, setPullY]           = useState(0);
+  const [isPulling, setIsPulling]   = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const touchStartY = useRef(0);
+  const scrollElRef = useRef(null);
+  const PULL_THRESHOLD = 70; // これ以上引っ張ったら離した時に更新
+
+  const handleTouchStart = (e) => {
+    // ページ最上部にいるときだけPull-to-Refreshを有効化
+    if (window.scrollY <= 0) {
+      touchStartY.current = e.touches[0].clientY;
+      setIsPulling(true);
+    }
+  };
+  const handleTouchMove = (e) => {
+    if (!isPulling || isRefreshing) return;
+    const diff = e.touches[0].clientY - touchStartY.current;
+    if (diff > 0 && window.scrollY <= 0) {
+      // 抵抗をかけながら引っ張り量を計算（下に行くほど伸びにくく）
+      setPullY(Math.min(diff * 0.5, 110));
+    } else {
+      setPullY(0);
+    }
+  };
+  const handleTouchEnd = () => {
+    if (isPulling && pullY >= PULL_THRESHOLD && !isRefreshing) {
+      setIsRefreshing(true);
+      refreshAllPrices();
+      // 見た目上のフィードバックのため最低800ms表示
+      setTimeout(() => {
+        setIsRefreshing(false);
+        setPullY(0);
+      }, 800);
+    } else {
+      setPullY(0);
+    }
+    setIsPulling(false);
+  };
+
   return (
-    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'Helvetica Neue',Arial,sans-serif",maxWidth:480,margin:"0 auto"}}>
+    <div
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'Helvetica Neue',Arial,sans-serif",maxWidth:480,margin:"0 auto",position:"relative"}}>
+
+      {/* Pull-to-Refresh インジケーター */}
+      <div style={{
+        position:"absolute", top:0, left:0, right:0, zIndex:30,
+        height: pullY, overflow:"hidden",
+        display:"flex", alignItems:"flex-end", justifyContent:"center",
+        transition: isPulling ? "none" : "height 0.3s ease-out",
+        pointerEvents:"none",
+      }}>
+        <div style={{paddingBottom:12, display:"flex", flexDirection:"column", alignItems:"center", gap:4}}>
+          <div style={{
+            fontSize:20,
+            transform: `rotate(${isRefreshing ? 0 : Math.min(pullY / PULL_THRESHOLD, 1) * 180}deg)`,
+            transition: isRefreshing ? "none" : "transform 0.1s",
+            animation: isRefreshing ? "kabu-spin 0.6s linear infinite" : "none",
+          }}>
+            {isRefreshing ? "🔄" : "⬇️"}
+          </div>
+          <div style={{fontSize:10, color:C.light, fontWeight:600}}>
+            {isRefreshing ? "更新中..." : pullY >= PULL_THRESHOLD ? "離して更新" : "引っ張って更新"}
+          </div>
+        </div>
+      </div>
+      <style>{`@keyframes kabu-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+
+      <div style={{ transform: `translateY(${pullY}px)`, transition: isPulling ? "none" : "transform 0.3s ease-out" }}>
 
       {/* ── Header ── */}
       <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,zIndex:10,boxShadow:"0 2px 12px rgba(0,0,0,0.06)"}}>
@@ -1196,7 +1266,9 @@ function KabuPlusInner() {
                         {h.cp&&<div style={{fontSize:11,color:C.amber,marginTop:1}}>¥{h.cp?.price?.toLocaleString()} ({h.cp?.change24h>=0?"+":""}{h.cp?.change24h?.toFixed(1)}% 24h) <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {h.currentPrice&&typeof h.currentPrice==="number"&&<div style={{fontSize:11,color:C.blue,marginTop:1}}>¥{h.currentPrice.toLocaleString()} {h.spChange!=null&&typeof h.spChange==="number"&&`(${h.spChange>=0?"+":""}${h.spChange.toFixed(1)}%)`} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
                         {h.fp?.price&&typeof h.fp.price==="number"&&<div style={{fontSize:11,color:"#7C3AED",marginTop:1}}>基準価額: ¥{h.fp.price.toLocaleString()} <span style={{color:C.green,fontSize:10,fontWeight:700}}>●LIVE</span></div>}
-                        {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>年率近似で計算中（{h.stock?.type==="fund"?"基準価額":"株価"}取得待ち・30秒毎に再試行）</div>}
+                        {!h.isLive&&<div style={{fontSize:10,color:C.light,marginTop:1}}>
+                          年率近似で計算中（{h.stock?.type==="fund"?"基準価額":"株価"}取得できず・自動取得は諦めました）
+                        </div>}
                         {h.isLive&&!h.purchasePrice&&(
                           <button onClick={()=>{
                             const livePrice = h.currentPrice ?? h.cp?.price ?? h.fp?.price;
@@ -1668,6 +1740,7 @@ function KabuPlusInner() {
       </div>
       <div style={{padding:"0 16px 36px",textAlign:"center"}}>
         <p style={{fontSize:10,color:C.light,lineHeight:1.7}}>⚠️ 過去実績ベースの参考シミュレーションです。将来の利益を保証するものではありません。投資は自己責任でお願いします。</p>
+      </div>
       </div>
     </div>
   );
